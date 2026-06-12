@@ -1,0 +1,7 @@
+---
+name: kSNP4 (dev)
+description: "Dev: branch-picker test environment for kSNP4 GUI. Not for production data."
+icon: fa://flask
+category: Bioinformatics
+subcategory: Phylogenomics (dev)
+role: batch_connect

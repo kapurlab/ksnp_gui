@@ -1,0 +1,7 @@
+---
+name: kSNP4
+description: "Reference-free, alignment-free SNP discovery & phylogenetics from genome FASTAs (parsimony / ML / NJ trees, core-SNP matrices, VCF)"
+icon: fa://tree
+category: Bioinformatics
+subcategory: Phylogenomics
+role: batch_connect

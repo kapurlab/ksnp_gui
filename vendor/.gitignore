@@ -1,0 +1,4 @@
+# kSNP4 is downloaded by deploy/install.sh from SourceForge (≈545 MB) — never committed.
+*
+!.gitignore
+!README.md

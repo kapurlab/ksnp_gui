@@ -1,0 +1,49 @@
+# Environment for the kSNP4 GUI.
+# Install (shared) with:
+#   mamba env create -p /srv/kapurlab/tools/ksnp_gui/env -f conda_setup/environment.yml
+# or (personal) with:
+#   mamba env create -f conda_setup/environment.yml   # -> env name ksnp
+#
+# kSNP4 itself is NOT a conda package — it is downloaded from SourceForge by
+# deploy/install.sh (the kSNP4.1 Linux package, ≈545 MB, self-contained
+# binaries) into vendor/kSNP4-bin and added to PATH. This env provides the
+# Python web/report stack plus the few external tools kSNP4 and the QC step
+# rely on (tcsh shell, seqkit).
+name: ksnp
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # Core Python
+  - python=3.10
+  - pip
+  - numpy
+  - openpyxl
+  - biopython          # Bio.Phylo — render the ML/parsimony tree in the PDF
+  - matplotlib-base    # report figures
+  - reportlab          # PDF report (pure-Python; no headless browser)
+  - pillow             # image sizing in the PDF
+
+  # External tools kSNP4 / QC need on PATH
+  - tcsh               # some kSNP4 driver scripts use #!/bin/tcsh
+  - seqkit             # input genome QC stats
+  - perl               # kSNP4 helper scripts shebang #!/usr/bin/env perl
+
+  # Web backend (FastAPI serves the GUI under OOD)
+  - fastapi>=0.115.0
+  - uvicorn-standard
+  - aiofiles
+  - jinja2
+  - pyyaml
+
+  - pip:
+      - pydantic>=2.0.0
+
+# Notes:
+#  - kSNP4.1 bundles jellyfish, mummer, FastTreeMP, parsimonator etc. — no
+#    extra installs are required for the core tool ("install the package of
+#    executables, not the source").
+#  - deploy/install.sh downloads + unpacks kSNP4 and verifies kSNP4 / Kchooser4
+#    / MakeKSNP4infile resolve with the env's bin on PATH.

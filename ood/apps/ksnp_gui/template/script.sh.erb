@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# kSNP4 GUI OOD batch_connect script.
+# $port (uvicorn) is exported by before.sh.
+
+echo "=== kSNP4 GUI Session Starting ==="
+echo "uvicorn:${port}"
+
+# Shared conda env installed at the tool root; fall back to a personal install.
+SHARED_ENV=/srv/kapurlab/tools/ksnp_gui/env
+PERSONAL_ENV=/home/${USER}/miniforge3/envs/ksnp
+PERSONAL_BASE_PYTHON=/home/${USER}/miniforge3/bin/python
+
+if [ -d "${SHARED_ENV}" ] && [ -x "${SHARED_ENV}/bin/python" ]; then
+  KSNP_ENV="${SHARED_ENV}"
+  PYTHON="${SHARED_ENV}/bin/python"
+elif [ -d "${PERSONAL_ENV}" ]; then
+  KSNP_ENV="${PERSONAL_ENV}"
+  PYTHON="${PERSONAL_ENV}/bin/python"
+else
+  KSNP_ENV=""
+  PYTHON="${PERSONAL_BASE_PYTHON}"
+fi
+
+# Tool source (shared install only — no per-user fallback for the app itself)
+KSNP_GUI=/srv/kapurlab/tools/ksnp_gui
+# kSNP4 executables (installed by deploy/install.sh into vendor/kSNP4-bin)
+KSNP_BIN="${KSNP_GUI}/vendor/kSNP4-bin"
+
+# env bin first, then the kSNP4 package dir (so kSNP4/Kchooser4/MakeKSNP4infile
+# resolve, and they find the env's tcsh/perl/seqkit).
+export PATH="${KSNP_ENV}/bin:${KSNP_BIN}:${PATH}"
+# PYTHONPATH lets the ksnp bin/ scripts find each other (local imports + reporting)
+export PYTHONPATH="${KSNP_GUI}/bin:${PYTHONPATH}"
+
+cd "${KSNP_GUI}/backend"
+echo "Starting uvicorn on port ${port}"
+echo "  conda env: ${KSNP_ENV}"
+echo "  ksnp_gui:  ${KSNP_GUI}"
+echo "  kSNP4 bin: ${KSNP_BIN}"
+exec $PYTHON -m uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port "${port}" \
+    --log-level info
