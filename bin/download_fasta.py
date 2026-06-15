@@ -59,10 +59,14 @@ def log(msg: str = "") -> None:
 
 
 def _sanitize(stem: str, maxlen: int = 80) -> str:
-    """kSNP-safe, filesystem-safe name: keep [A-Za-z0-9_.-], collapse the rest."""
-    name = re.sub(r"[^A-Za-z0-9_.-]", "_", stem)
-    name = re.sub(r"_{2,}", "_", name).strip("_.-")
-    return (name or "genome")[:maxlen].strip("_.-") or "genome"
+    """kSNP-safe name stem: keep [A-Za-z0-9_-], replace the rest with '_'.
+
+    Dots are removed too — kSNP allows only one '.' per filename (the extension
+    separator), so an accession version like 'GCA_000195835.3' must become
+    'GCA_000195835_3' in the name (the '.fasta' is added by the caller)."""
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", stem)
+    name = re.sub(r"_{2,}", "_", name).strip("_-")
+    return (name or "genome")[:maxlen].strip("_-") or "genome"
 
 
 def _is_assembly(acc: str) -> bool:

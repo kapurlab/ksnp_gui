@@ -125,12 +125,14 @@ def _ksnp_version() -> Optional[str]:
 def _sanitize_name(stem: str) -> str:
     """Make a kSNP-safe genome name.
 
-    kSNP4 is strict: genome names must contain no spaces or special characters.
-    Replace anything outside [A-Za-z0-9_.-] with '_', collapse repeats, trim
-    leading/trailing separators. Never returns an empty string.
+    kSNP4 is strict: genome names must contain no spaces or special characters,
+    and **no dots** — kSNP allows only one '.' per filename, the extension
+    separator (so 'Lineage_1.1.2' or an accession like 'GCA_000195835.3' in the
+    name would be rejected). Replace anything outside [A-Za-z0-9_-] with '_'
+    (dots included), collapse repeats, trim separators. Never returns empty.
     """
-    name = re.sub(r"[^A-Za-z0-9_.-]", "_", stem)
-    name = re.sub(r"_{2,}", "_", name).strip("_.-")
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", stem)
+    name = re.sub(r"_{2,}", "_", name).strip("_-")
     return name or "genome"
 
 

@@ -427,9 +427,12 @@ class RenameRequest(BaseModel):
 
 
 def _sanitize_filename(stem: str) -> str:
-    """Filesystem/kSNP-safe basename (no extension): keep [A-Za-z0-9_.-]."""
-    s = re.sub(r"[^A-Za-z0-9_.-]", "_", stem.strip())
-    s = re.sub(r"_{2,}", "_", s).strip("_.-")
+    """kSNP-safe basename stem (no extension): keep [A-Za-z0-9_-].
+
+    Dots are replaced with '_' — kSNP permits only one '.' per filename (the
+    extension separator), so the name stem must be dot-free."""
+    s = re.sub(r"[^A-Za-z0-9_-]", "_", stem.strip())
+    s = re.sub(r"_{2,}", "_", s).strip("_-")
     return s
 
 
