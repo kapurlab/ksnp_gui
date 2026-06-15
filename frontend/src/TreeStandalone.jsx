@@ -19,6 +19,7 @@ export default function TreeStandalone() {
   const lowerPath = (path || "").toLowerCase();
   const isAlleleTree = lowerPath.includes("allelecounts");      // internal labels = SNP counts
   const isTipAlleleTree = lowerPath.includes("tipallelecounts"); // tip names also end in _N (SNP count)
+  const isNodeLabelTree = lowerPath.includes("nodelabel");       // labels are node#+support_count — messy
 
   const [status, setStatus] = useState(project && path ? "Loading…" : "Missing project or path.");
   // Allele-count trees carry the SNP counts as node/tip labels — show them by default.
@@ -55,7 +56,12 @@ export default function TreeStandalone() {
       "node-styler": (element, node) => {
         const data = (node && node.data) || {};
         if (node && node.children) {
-          if (data.name === "root") element.select("text").text("");
+          if (data.name === "root") { element.select("text").text(""); return; }
+          // NodeLabel trees label internal nodes "node#+support_count" (e.g.
+          // "61.00_0"); show just the SNP count (after the last underscore).
+          if (isNodeLabelTree && typeof data.name === "string" && data.name.includes("_")) {
+            element.select("text").text(data.name.split("_").pop());
+          }
           return;
         }
         const name = data.name || "";
@@ -170,11 +176,11 @@ export default function TreeStandalone() {
       </div>
       <div style={{ padding: "4px 12px", fontSize: "0.78em", color: "#6e7b82", background: "#fbfaf8", borderBottom: "1px solid #f1ede6", lineHeight: 1.45 }}>
         {isTipAlleleTree ? (
-          <span><strong>SNP counts:</strong> turn on “SNP-count node labels” — internal numbers are the SNPs shared by that clade (and found nowhere else), and each strain name ends in <code>_N</code> = SNPs unique to that strain. </span>
+          <span><strong>SNP counts:</strong> each <strong>strain name ends in <code>_N</code></strong> = the number of SNPs <strong>unique to that isolate</strong> (these vary and are the most useful). Internal numbers = SNPs that <em>perfectly and uniquely</em> mark that clade — often <strong>0</strong>, because most SNPs recur elsewhere (homoplasy); that is expected, not a bug. </span>
         ) : isAlleleTree ? (
-          <span><strong>SNP counts:</strong> the internal node numbers are the SNPs shared by that clade and found nowhere else — the SNP support for that branch. </span>
+          <span><strong>SNP counts:</strong> internal numbers = SNPs that <em>perfectly and uniquely</em> mark that clade and occur nowhere else. These are <strong>often 0</strong> (most SNPs recur elsewhere — homoplasy), so don't be surprised by zeros. For per-isolate SNP counts that actually vary, open the <strong>“per-isolate SNP counts on tips”</strong> tree (<code>tree_tipAlleleCounts…parsimony.tre</code>). </span>
         ) : (
-          <span>Internal node numbers here are <strong>branch support</strong> (0–1 from FastTreeMP), <em>not</em> SNP counts. To see SNP counts per branch, open an <strong>“allele counts”</strong> tree (e.g. <code>tree_AlleleCounts…</code> or <code>tree_tipAlleleCounts…</code>). </span>
+          <span>Internal node numbers here are <strong>branch support</strong> (0–1 from FastTreeMP), <em>not</em> SNP counts. For SNP counts open a <strong>“clade SNP counts”</strong> or <strong>“per-isolate SNP counts”</strong> tree (<code>tree_AlleleCounts…</code> / <code>tree_tipAlleleCounts…</code>); the <strong>parsimony</strong> versions are clearest (avoid the <code>NodeLabel</code> ones). </span>
         )}
         The <strong>scale / branch lengths are substitutions per site (relative)</strong>, not SNP counts — kSNP only expresses SNP differences as the allele-count labels above. Trees are <strong>unrooted</strong>; use Midpoint root or click a branch (Reroot) to orient.
       </div>

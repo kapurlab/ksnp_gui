@@ -898,11 +898,11 @@ def _tree_label(name: str) -> str:
     head = " ".join(p for p in (snp_set, (f"{method} tree" if method else "tree")) if p)
     extras = []
     if "tree_tipallelecounts" in low:
-        extras.append("tip allele counts")
+        extras.append("per-isolate SNP counts on tips")
     elif "tree_allelecounts" in low:
-        extras.append("branch allele counts")
+        extras.append("clade SNP counts on branches")
     if "nodelabel" in low:
-        extras.append("node labels")
+        extras.append("node numbers")
     if extras:
         head += " (" + ", ".join(extras) + ")"
     return f"{head[:1].upper()}{head[1:]} — {name}"
