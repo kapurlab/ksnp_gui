@@ -387,6 +387,89 @@ def api_project_sra_download(name: str, payload: SraRequest):
     return JSONResponse({"job_id": job_id})
 
 
+class FastaDownloadRequest(BaseModel):
+    accessions: List[str]
+    rename: bool = True      # save metadata-derived names (organism/strain) vs bare accession
+
+
+@app.post("/api/projects/{name}/fasta/download")
+def api_project_fasta_download(name: str, payload: FastaDownloadRequest):
+    """Download genome FASTAs by accession into download/ as a background job.
+
+    GCA/GCF assembly accessions go through the NCBI `datasets` CLI (with
+    metadata-derived names); other (nucleotide) accessions go through eutils
+    efetch. kSNP runs on FASTA assemblies, so this is the primary input path."""
+    project_dir = _writable_project_dir(name)
+    accs = [a.strip() for a in (payload.accessions or []) if a.strip()]
+    if not accs:
+        raise HTTPException(400, "No accessions provided.")
+    download_dir = project_dir / "download"
+    script = _BIN_DIR / "download_fasta.py"
+    command = [sys.executable, "-u", str(script), "--outdir", str(download_dir)]
+    if not payload.rename:
+        command.append("--no-rename")
+    command += ["--accessions", *accs]
+    env = {
+        "PYTHONPATH": str(_BIN_DIR),
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONUNBUFFERED": "1",
+    }
+    job_id = job_manager.start_job(
+        name=f"fasta_download — {name} ({len(accs)})",
+        command=command, cwd=download_dir, env=env,
+    )
+    return JSONResponse({"job_id": job_id, "count": len(accs)})
+
+
+class RenameRequest(BaseModel):
+    old: str
+    new: str
+
+
+def _sanitize_filename(stem: str) -> str:
+    """Filesystem/kSNP-safe basename (no extension): keep [A-Za-z0-9_.-]."""
+    s = re.sub(r"[^A-Za-z0-9_.-]", "_", stem.strip())
+    s = re.sub(r"_{2,}", "_", s).strip("_.-")
+    return s
+
+
+@app.post("/api/projects/{name}/inputs/rename")
+def api_project_input_rename(name: str, payload: RenameRequest):
+    """Rename a file in download/ so genome names carry useful metadata in the
+    kSNP output (like vSNP's renaming). The new name is sanitised to kSNP-safe
+    characters; the original extension is preserved."""
+    old = (payload.old or "").strip()
+    if not old or "/" in old or "\\" in old or old.startswith(".") or ".." in old:
+        raise HTTPException(400, "Invalid source filename")
+    project_dir = _get_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(404, f"Project not found: {name}")
+    download_dir = project_dir / "download"
+    src = download_dir / old
+    if not (src.is_file() or src.is_symlink()):
+        raise HTTPException(404, f"File not found: {old}")
+
+    # Preserve the on-disk extension; sanitise the requested base name.
+    suffix = "".join(Path(old).suffixes) if old.lower().endswith(".fastq.gz") else Path(old).suffix
+    new_raw = (payload.new or "").strip()
+    # Let the user type a name with or without an extension; strip a trailing
+    # known extension before sanitising, then re-attach the original suffix.
+    for ext in _FASTA_EXTS + (".fastq.gz",):
+        if new_raw.lower().endswith(ext):
+            new_raw = new_raw[: -len(ext)]
+            break
+    new_base = _sanitize_filename(new_raw)
+    if not new_base:
+        raise HTTPException(400, "New name is empty after sanitising.")
+    dst = download_dir / f"{new_base}{suffix}"
+    if dst == src:
+        return JSONResponse({"old": old, "new": dst.name, "unchanged": True})
+    if dst.exists():
+        raise HTTPException(409, f"A file named {dst.name} already exists.")
+    src.rename(dst)
+    return JSONResponse({"old": old, "new": dst.name})
+
+
 @app.get("/api/projects/{name}/samples")
 def api_project_samples(name: str):
     """List genome FASTAs in download/ (kSNP operates on FASTA assemblies)."""

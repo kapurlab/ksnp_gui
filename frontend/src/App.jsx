@@ -42,6 +42,8 @@ export default function App() {
   const [activeProject, setActiveProject] = useState("");
   const [addPath, setAddPath] = useState({});
   const [sraText, setSraText] = useState({});
+  const [accText, setAccText] = useState({});        // FASTA-by-accession (GCA/GCF/nucleotide)
+  const [accRename, setAccRename] = useState(true);  // save metadata-derived names
   const [addStatus, setAddStatus] = useState({});
   const [inputsByProj, setInputsByProj] = useState({});
   const uploadProjRef = useRef("");
@@ -290,6 +292,59 @@ export default function App() {
       });
     } catch (e) {
       setStat(name, `Download failed: ${e.message}`);
+    }
+  }
+
+  function parseAccList(text) {
+    return (text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  }
+
+  async function fastaDownload(name) {
+    const accessions = parseAccList(accText[name]);
+    if (!accessions.length) return;
+    setStat(name, `Fetching ${accessions.length} genome FASTA${accessions.length === 1 ? "" : "s"}…`);
+    setShowLogs(true);
+    try {
+      const res = await fetch(`./api/projects/${encodeURIComponent(name)}/fasta/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessions, rename: accRename }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setStat(name, `Download failed: ${data.detail || res.status}`); return; }
+      setStat(name, "Downloading genomes… progress shows in the Pipeline Log below.");
+      setAccText((m) => ({ ...m, [name]: "" }));
+      setJobId(data.job_id);
+      setJobStatus("running");
+      setLogLines([]);
+      streamLogUntilDone(data.job_id, null, () => {
+        setStat(name, "Genome download finished — see genomes below.");
+        refreshAfterLoad(name);
+      });
+    } catch (e) {
+      setStat(name, `Download failed: ${e.message}`);
+    }
+  }
+
+  async function renameInput(name, oldFile) {
+    const suggestion = oldFile.replace(/\.(fasta|fa|fna|fas|ffn|fsa)$/i, "");
+    const nn = window.prompt(
+      `Rename "${oldFile}".\nGive it a meaningful label — it becomes the genome name in the kSNP trees & matrices.\nThe extension is kept; spaces and special characters become "_".`,
+      suggestion
+    );
+    if (nn === null || !nn.trim()) return;
+    try {
+      const res = await fetch(`./api/projects/${encodeURIComponent(name)}/inputs/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old: oldFile, new: nn }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setStat(name, `Rename failed: ${data.detail || res.status}`); return; }
+      setStat(name, `Renamed to ${data.new}.`);
+      await refreshAfterLoad(name);
+    } catch (e) {
+      setStat(name, `Rename failed: ${e.message}`);
     }
   }
 
@@ -671,6 +726,7 @@ export default function App() {
                                 <div className="sample-name" title={g.name} style={{ flex: 1 }}>{g.sample}</div>
                                 <span className="read-badge badge-pe">FASTA</span>
                                 <span className="file-size">{fmtSize(g.size)}</span>
+                                <button className="ghost" style={{ fontSize: 11 }} title="Rename — set a meaningful label for the kSNP tree" onClick={() => renameInput(proj.name, g.name)}>✎</button>
                               </div>
                             </div>
                           );
@@ -777,6 +833,7 @@ export default function App() {
                                   {f.name}{!f.is_fasta && <span className="muted" style={{ fontSize: 11 }}> (not FASTA)</span>}
                                 </span>
                                 <span className="file-size">{fmtSize(f.size)}</span>
+                                <button className="ghost" style={{ fontSize: 11, padding: "2px 7px" }} title="Rename (sets the kSNP genome label)" onClick={() => renameInput(activeProject, f.name)}>✎</button>
                                 <button className="ghost" style={{ fontSize: 11, padding: "2px 7px" }} title="Remove from download/" onClick={() => deleteInput(activeProject, f.name)}>✕</button>
                               </div>
                             ))}
@@ -786,22 +843,47 @@ export default function App() {
                     </div>
 
                     <div className="input-column">
-                      <h3>SRA Download</h3>
+                      <h3>Download genome FASTA by accession</h3>
                       <textarea
-                        rows={6}
-                        placeholder={"SRR/ERR/DRR accessions (one per line)\nNote: SRA gives FASTQ reads — assemble to FASTA before kSNP."}
-                        value={sraText[activeProject] || ""}
-                        onChange={(e) => setSraText((m) => ({ ...m, [activeProject]: e.target.value }))}
+                        rows={5}
+                        placeholder={"Assembly (GCA_/GCF_) or nucleotide (NC_/CP_/…) accessions\none per line, e.g.\nGCA_000195835.3\nNC_045512.2"}
+                        value={accText[activeProject] || ""}
+                        onChange={(e) => setAccText((m) => ({ ...m, [activeProject]: e.target.value }))}
                         style={{ resize: "vertical", fontFamily: "inherit" }}
                       />
+                      <label className="checkbox-label" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", margin: "4px 0" }}>
+                        <input type="checkbox" checked={accRename} onChange={(e) => setAccRename(e.target.checked)} />
+                        <span style={{ fontSize: 12 }}>Name files by organism / strain metadata (recommended)</span>
+                      </label>
                       <button
                         style={{ width: "100%" }}
-                        onClick={() => sraDownload(activeProject)}
-                        disabled={!parseAccessions(sraText[activeProject]).length || running}
+                        onClick={() => fastaDownload(activeProject)}
+                        disabled={!parseAccList(accText[activeProject]).length || running}
                       >
-                        Download{parseAccessions(sraText[activeProject]).length ? ` (${parseAccessions(sraText[activeProject]).length})` : ""}
+                        Fetch FASTA{parseAccList(accText[activeProject]).length ? ` (${parseAccList(accText[activeProject]).length})` : ""}
                       </button>
-                      <div className="form-hint">Runs in the background. kSNP needs genome FASTAs, not raw reads.</div>
+                      <div className="form-hint">
+                        Assemblies via NCBI <code>datasets</code>; nucleotide accessions via eutils. Files land in <code>download/</code> ready for kSNP — rename any with the ✎ button to set the tree label.
+                      </div>
+
+                      <div className="block">
+                        <h3>SRA Download (reads)</h3>
+                        <textarea
+                          rows={4}
+                          placeholder={"SRR/ERR/DRR accessions (one per line)\nNote: SRA gives FASTQ reads — assemble to FASTA before kSNP."}
+                          value={sraText[activeProject] || ""}
+                          onChange={(e) => setSraText((m) => ({ ...m, [activeProject]: e.target.value }))}
+                          style={{ resize: "vertical", fontFamily: "inherit" }}
+                        />
+                        <button
+                          style={{ width: "100%" }}
+                          onClick={() => sraDownload(activeProject)}
+                          disabled={!parseAccessions(sraText[activeProject]).length || running}
+                        >
+                          Download reads{parseAccessions(sraText[activeProject]).length ? ` (${parseAccessions(sraText[activeProject]).length})` : ""}
+                        </button>
+                        <div className="form-hint">Runs in the background. kSNP needs genome FASTAs, not raw reads — use the FASTA fetch above for ready-to-run genomes.</div>
+                      </div>
                     </div>
                   </div>
                 )}

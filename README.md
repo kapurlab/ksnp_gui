@@ -23,6 +23,18 @@ Give it a set of genome **FASTA** assemblies in a project; it:
 kSNP is a *set* analysis: one run uses a whole project's selected genomes and
 writes to `<project>/ksnp/<label>/`.
 
+### Getting genomes in
+
+A project is a collection of genome **FASTAs**. Populate `download/` by:
+- **Download by accession** — GCA/GCF assembly accessions (via NCBI `datasets`)
+  or nucleotide accessions (via eutils efetch). Files are named from the
+  assembly's organism/strain metadata (the Name differs from the GCA number),
+  with a `fasta_download_crosswalk.tsv` for provenance.
+- **Link / upload / drag-drop** existing FASTAs (SRA reads are also supported
+  but must be assembled to FASTA before kSNP).
+- **Rename** any genome (✎ in the UI) so it carries meaningful metadata — the
+  filename becomes the genome label in the kSNP trees and matrices, à la vSNP.
+
 ## Quick start (deploy)
 
 ```bash

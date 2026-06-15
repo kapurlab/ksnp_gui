@@ -151,6 +151,8 @@ for t in kSNP4 Kchooser4 MakeKSNP4infile; do
 done
 if command -v seqkit >/dev/null 2>&1; then ok "seqkit: $(seqkit version 2>&1 | head -1)"
 else warn "seqkit not on PATH — input QC will be skipped at runtime."; fi
+if command -v datasets >/dev/null 2>&1; then ok "datasets: $(datasets --version 2>&1 | head -1)"
+else warn "ncbi-datasets-cli not on PATH — GCA/GCF FASTA download disabled (nucleotide efetch still works)."; fi
 "${PYTHON}" -c "import reportlab, openpyxl, matplotlib, Bio; print('  python report deps ok')" \
   || warn "python report deps missing — re-run pip install."
 

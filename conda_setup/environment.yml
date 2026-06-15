@@ -26,10 +26,11 @@ dependencies:
   - reportlab          # PDF report (pure-Python; no headless browser)
   - pillow             # image sizing in the PDF
 
-  # External tools kSNP4 / QC need on PATH
+  # External tools kSNP4 / QC / downloads need on PATH
   - tcsh               # some kSNP4 driver scripts use #!/bin/tcsh
   - seqkit             # input genome QC stats
   - perl               # kSNP4 helper scripts shebang #!/usr/bin/env perl
+  - ncbi-datasets-cli  # download genome FASTAs by GCA/GCF assembly accession
 
   # Web backend (FastAPI serves the GUI under OOD)
   - fastapi>=0.115.0

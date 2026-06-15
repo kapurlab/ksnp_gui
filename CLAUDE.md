@@ -16,6 +16,22 @@ core- and pan-SNP matrices, and per-SNP VCFs.
 FastAPI backend + React (Vite) SPA, deployed as an Open OnDemand batch_connect
 interactive app. One uvicorn per session behind OOD's Apache rnode proxy.
 
+## Getting genomes in (FASTA-first)
+
+kSNP runs on a *collection of genome FASTAs*. Four ways to populate a project's
+`download/`:
+- **Download by accession** (`bin/download_fasta.py`, route `/api/projects/{n}/fasta/download`):
+  GCA/GCF assembly accessions → NCBI `datasets` CLI (file named from
+  organism+strain metadata, accession suffix for traceability — the Name differs
+  from the GCA number); nucleotide accessions → eutils efetch (rate-limited).
+  Writes `fasta_download_crosswalk.tsv`. This is the primary path.
+- **Link** a server-side dir/file (symlink), **upload/drag-drop**, or **SRA**
+  (reads — must be assembled to FASTA first; kept for cross-tool projects).
+- **Rename** any file (`/api/projects/{n}/inputs/rename`, ✎ in the UI) so the
+  genome carries useful metadata — the on-disk basename becomes the kSNP genome
+  label in trees/matrices. Names are sanitised to `[A-Za-z0-9_.-]`; extension
+  preserved. (The pipeline also sanitises again at run time as a safety net.)
+
 ## kSNP is a SET analysis (not per-sample)
 
 Unlike the per-sample siblings, **one run consumes a whole project's selected
