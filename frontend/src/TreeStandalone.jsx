@@ -16,8 +16,13 @@ export default function TreeStandalone() {
   const project = params.get("project") || "";
   const path = params.get("path") || "";
 
+  const lowerPath = (path || "").toLowerCase();
+  const isAlleleTree = lowerPath.includes("allelecounts");      // internal labels = SNP counts
+  const isTipAlleleTree = lowerPath.includes("tipallelecounts"); // tip names also end in _N (SNP count)
+
   const [status, setStatus] = useState(project && path ? "Loading…" : "Missing project or path.");
-  const [showLabels, setShowLabels] = useState(false);
+  // Allele-count trees carry the SNP counts as node/tip labels — show them by default.
+  const [showLabels, setShowLabels] = useState(isAlleleTree);
   const [searchTerm, setSearchTerm] = useState("");
   const [rerootMode, setRerootMode] = useState(false);
   const [counts, setCounts] = useState({ leaves: 0 });
@@ -156,15 +161,22 @@ export default function TreeStandalone() {
         </span>
         <span style={{ flex: 1 }} />
         <input placeholder="Search tip…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: 180 }} />
-        <label style={{ fontSize: "0.9em" }}><input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} /> Node labels</label>
+        <label style={{ fontSize: "0.9em" }}><input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} /> {isAlleleTree ? "SNP-count node labels" : "Node labels"}</label>
         <label style={{ fontSize: "0.9em" }}><input type="checkbox" checked={rerootMode} onChange={(e) => setRerootMode(e.target.checked)} /> Reroot (click a branch)</label>
         <button onClick={midpointRoot}>Midpoint root</button>
         <button onClick={resetRoot}>Reset</button>
         <button onClick={downloadTre}>Download .tre</button>
         {status ? <span style={{ color: "#c0392b", fontSize: "0.9em" }}>{status}</span> : null}
       </div>
-      <div style={{ padding: "4px 12px", fontSize: "0.78em", color: "#6e7b82", background: "#fbfaf8", borderBottom: "1px solid #f1ede6" }}>
-        kSNP trees are <strong>unrooted</strong> — the apparent root is for drawing only. Branch lengths are changes per number of SNPs. Use Midpoint root or click a branch (Reroot) to orient.
+      <div style={{ padding: "4px 12px", fontSize: "0.78em", color: "#6e7b82", background: "#fbfaf8", borderBottom: "1px solid #f1ede6", lineHeight: 1.45 }}>
+        {isTipAlleleTree ? (
+          <span><strong>SNP counts:</strong> turn on “SNP-count node labels” — internal numbers are the SNPs shared by that clade (and found nowhere else), and each strain name ends in <code>_N</code> = SNPs unique to that strain. </span>
+        ) : isAlleleTree ? (
+          <span><strong>SNP counts:</strong> the internal node numbers are the SNPs shared by that clade and found nowhere else — the SNP support for that branch. </span>
+        ) : (
+          <span>Internal node numbers here are <strong>branch support</strong> (0–1 from FastTreeMP), <em>not</em> SNP counts. To see SNP counts per branch, open an <strong>“allele counts”</strong> tree (e.g. <code>tree_AlleleCounts…</code> or <code>tree_tipAlleleCounts…</code>). </span>
+        )}
+        The <strong>scale / branch lengths are substitutions per site (relative)</strong>, not SNP counts — kSNP only expresses SNP differences as the allele-count labels above. Trees are <strong>unrooted</strong>; use Midpoint root or click a branch (Reroot) to orient.
       </div>
       <div ref={containerRef} style={{ flex: 1, overflow: "auto", background: "#fff" }} />
     </div>

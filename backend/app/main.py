@@ -806,13 +806,28 @@ _DOWNLOAD_MEDIA = {
 }
 
 
+# Extensions that are genuinely binary and can't be shown in a browser tab.
+# Everything else — including the many extension-less kSNP text files
+# (COUNT_SNPs, core_SNPs, SNPs_all, *_matrix, tip_SNP_counts, …) — is served
+# inline as text so users can click to view it, with a separate download link.
+_BINARY_EXTS = {".xlsx", ".xls", ".gz", ".zip", ".bam", ".bai", ".bcf"}
+
+
 def _can_open_inline(name: str) -> bool:
-    return Path(name).suffix.lower() in _INLINE_MEDIA
+    """True if the file can be shown in a browser tab (text, or a format the
+    browser renders like pdf/html/image). Only true binaries are excluded."""
+    return Path(name).suffix.lower() not in _BINARY_EXTS
 
 
 def _media_type_for(name: str) -> str:
     ext = Path(name).suffix.lower()
-    return _INLINE_MEDIA.get(ext) or _DOWNLOAD_MEDIA.get(ext) or "application/octet-stream"
+    if ext in _INLINE_MEDIA:
+        return _INLINE_MEDIA[ext]
+    if ext in _DOWNLOAD_MEDIA:
+        return _DOWNLOAD_MEDIA[ext]
+    # Unknown / no extension: kSNP's are text, so serve as text/plain (viewable);
+    # only the explicit binaries above fall back to octet-stream.
+    return "application/octet-stream" if ext in _BINARY_EXTS else "text/plain"
 
 
 def _result_category(rel: str) -> Optional[str]:
