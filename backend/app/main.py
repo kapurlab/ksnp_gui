@@ -868,7 +868,34 @@ _CATEGORY_ORDER = {
 }
 
 
+def _tree_label(name: str) -> str:
+    """Build a distinct, descriptive label for a kSNP .tre file from its name,
+    e.g. tree.core_SNPs.ML.tre -> 'Core-SNP maximum-likelihood tree — tree.core_SNPs.ML.tre'.
+    Without this every ML tree would read identically; the filename is appended
+    so users see exactly which file they're opening."""
+    low = name.lower()
+    snp_set = ("Core-SNP" if "core_snps" in low else
+               "All-SNP" if "snps_all" in low else
+               "Majority-SNP" if "majority" in low else "")
+    method = ("maximum-likelihood" if ".ml." in low or low.endswith(".ml.tre") else
+              "neighbor-joining" if ".nj." in low or low.endswith(".nj.tre") else
+              "parsimony" if "parsimony" in low else "")
+    head = " ".join(p for p in (snp_set, (f"{method} tree" if method else "tree")) if p)
+    extras = []
+    if "tree_tipallelecounts" in low:
+        extras.append("tip allele counts")
+    elif "tree_allelecounts" in low:
+        extras.append("branch allele counts")
+    if "nodelabel" in low:
+        extras.append("node labels")
+    if extras:
+        head += " (" + ", ".join(extras) + ")"
+    return f"{head[:1].upper()}{head[1:]} — {name}"
+
+
 def _result_label(rel: str, category: Optional[str]) -> str:
+    if category and category.startswith("tree"):
+        return _tree_label(Path(rel).name)
     return {
         "report_pdf": "Report (PDF)",
         "stats_xlsx": "Statistics workbook (Excel)",

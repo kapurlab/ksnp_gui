@@ -106,34 +106,6 @@ def _grid(data, ss, col_in, small=False):
 # ---------------------------------------------------------------------------
 # Figures (best-effort)
 # ---------------------------------------------------------------------------
-def _bar_genome_lengths(qc: Dict[str, Any], outpath: Path) -> bool:
-    genomes = [g for g in (qc.get("genomes") or []) if g.get("length")]
-    if len(genomes) < 2:
-        return False
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        genomes = sorted(genomes, key=lambda g: g["length"])
-        names = [g["name"][:28] for g in genomes]
-        vals = [g["length"] / 1e6 for g in genomes]
-        colours = ["#C88F7A" if g.get("verdict") == "review" else "#4C8C8A" for g in genomes]
-        fig, ax = plt.subplots(figsize=(6.6, max(1.6, 0.26 * len(names) + 0.7)))
-        ax.barh(names, vals, color=colours)
-        ax.set_xlabel("genome length (Mbp)")
-        ax.set_title("Input genome lengths (terracotta = >20% from median)",
-                     color="#1F2A2E", fontsize=10)
-        ax.tick_params(labelsize=7)
-        ax.spines[["top", "right"]].set_visible(False)
-        fig.tight_layout()
-        fig.savefig(outpath, dpi=150)
-        plt.close(fig)
-        return True
-    except Exception:
-        return False
-
-
 def _draw_tree(run_dir: Path, outpath: Path) -> Tuple[bool, str]:
     """Render a kSNP Newick tree to PNG via Biopython. Prefer ML > parsimony >
     core > any .tre. Returns (ok, tree_filename)."""
@@ -220,12 +192,13 @@ def write_pdf(ctx: Dict[str, Any], path: Path, outdir: Path) -> None:
         f"alignment-free k-mer approach (k = <b>{opts.get('k','?')}</b>, chosen by Kchooser4 "
         f"as the optimum for this set"
         + (f"; FCK = <b>{fck}</b>" if fck is not None else "")
-        + f"). It identified <b>{res.get('snps_all','?')}</b> SNP loci across the pan-genome "
-        f"and <b>{res.get('core_snps','?')}</b> core SNPs present in all genomes, and built "
+        + f"). It identified <b>{res.get('snps_all','?')}</b> SNP loci across the pan-genome, "
+        f"<b>{res.get('core_snps','?')}</b> core SNPs present in all genomes, and "
+        f"<b>{res.get('majority_snps','?')}</b> majority SNPs present in at least "
+        f"{int(float(opts.get('min_frac',0.8))*100)}% of genomes; it then built "
         f"{len(res.get('trees') or [])} phylogenetic tree(s)"
         + (" including a maximum-likelihood tree" if opts.get("ML") else "")
-        + f". SNP loci were required in at least <b>{int(float(opts.get('min_frac',0.8))*100)}%</b> "
-        f"of genomes (min_frac = {opts.get('min_frac','?')})."
+        + " (parsimony trees are the most accurate; all trees are unrooted)."
     )
     story.append(Paragraph(summary_txt, ss["Body"]))
     if fck is not None and fck < 0.2:
@@ -242,19 +215,17 @@ def write_pdf(ctx: Dict[str, Any], path: Path, outdir: Path) -> None:
         "length deviates more than 20% from the set median are flagged for review — an "
         "outlier is usually contamination or a mis-assembly and weakens the SNP set "
         "(ISO 15189 validity check).", ss["Body"]))
-    figL = assets / "genome_lengths.png"
-    if _bar_genome_lengths(qc, figL):
-        story.append(Image(str(figL), width=6.4 * inch, height=_img_h(figL, 6.4)))
     genomes = qc.get("genomes") or []
     if genomes:
         hdr = ["Genome", "Contigs", "Length (bp)", "N50", "GC%", "QC"]
         data = [hdr]
         for g in genomes[:80]:
             data.append([
-                g.get("name", "")[:32], _i(g.get("contigs")), _i(g.get("length")),
+                g.get("name", "")[:46], _i(g.get("contigs")), _i(g.get("length")),
                 _i(g.get("n50")), _f(g.get("gc_pct")), (g.get("verdict") or "—").upper(),
             ])
-        story.append(_grid(data, ss, [2.4, 0.8, 1.3, 1.0, 0.7, 0.7], small=True))
+        # Wider genome-name column; the numeric columns are narrow.
+        story.append(_grid(data, ss, [3.25, 0.6, 1.05, 0.95, 0.5, 0.55], small=True))
         if len(genomes) > 80:
             story.append(Paragraph(f"… {len(genomes) - 80} more in input_qc.json.", ss["Small"]))
     else:

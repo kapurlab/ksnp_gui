@@ -1110,12 +1110,17 @@ export default function App() {
                     <div className="results-list" style={{ marginBottom: 12 }}>
                       {resFiles.files.map((f) => {
                         const base = `./api/projects/${encodeURIComponent(selectedRun.project)}/file?path=${encodeURIComponent(f.path)}`;
+                        const isTree = /\.(tre|nwk)$/i.test(f.name);
+                        const treeUrl = `./?view=tree&project=${encodeURIComponent(selectedRun.project)}&path=${encodeURIComponent(f.path)}`;
+                        const openHref = isTree ? treeUrl : `${base}&inline=${f.openable ? 1 : 0}`;
+                        const openInNewTab = isTree || f.openable;
                         return (
                           <div key={f.name} className="results-item">
                             <span className="result-icon">{fileIcon(f.name)}</span>
-                            <a className="result-name result-link" href={`${base}&inline=${f.openable ? 1 : 0}`}
-                               target={f.openable ? "_blank" : undefined} rel="noopener noreferrer" title={f.name}>
-                              {f.label || f.name}
+                            <a className="result-name result-link" href={openHref}
+                               target={openInNewTab ? "_blank" : undefined} rel="noopener noreferrer"
+                               title={isTree ? `Open ${f.name} in the tree viewer` : f.name}>
+                              {f.label || f.name}{isTree ? " 🔍" : ""}
                             </a>
                             <span className="result-size">{fmtSize(f.size)}</span>
                             <a className="result-download" href={`${base}&inline=0`} title={`Download ${f.name}`}>⬇</a>
