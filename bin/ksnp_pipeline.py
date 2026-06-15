@@ -352,34 +352,175 @@ def run_ksnp(infile: Path, outdir: Path, run_name: str, k: int, threads: int,
 # ---------------------------------------------------------------------------
 # Result harvest — read kSNP outputs for the manifest / report
 # ---------------------------------------------------------------------------
-def _read_count(path: Path) -> Optional[int]:
-    """COUNT_SNPs / COUNT_coreSNPs hold a single integer (sometimes with text)."""
+def _read_text(path: Path) -> str:
     try:
-        txt = path.read_text(encoding="utf-8", errors="replace")
+        return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return None
-    m = re.search(r"(\d[\d,]*)", txt)
+        return ""
+
+
+def _grab_int(text: str, pattern: str) -> Optional[int]:
+    m = re.search(pattern, text, re.IGNORECASE)
     return int(m.group(1).replace(",", "")) if m else None
 
 
+# Plain-language grouping of the many kSNP4 output files (see User Guide §IX).
+# Each entry: (key, human label, one-line "what it is", "when to use it").
+FILE_GUIDE = [
+    ("report", "Report & stats (this run)",
+     "The PDF report and the Excel stats workbook summarising this run.",
+     "Start here. Open report.pdf for the plain-language summary."),
+    ("tree", "Phylogenetic trees (.tre)",
+     "Newick tree files — the relationships between genomes. One per SNP set "
+     "(all / core / majority) and method (parsimony, ML, NJ).",
+     "This is the main result. Open a .tre in FigTree / iTOL / MEGA. Prefer the "
+     "parsimony or core tree (most accurate). Trees are UNROOTED."),
+    ("alignment", "SNP alignments / matrices",
+     "FASTA (and PHYLIP) alignments of just the SNP positions, one row per genome.",
+     "Feed these into other phylogenetics / phenotype-association tools."),
+    ("snp_info", "SNP detail & annotation",
+     "Where each SNP sits in each genome, and (if annotated) the gene/codon/amino-acid effect.",
+     "Use when you want the position or gene of a specific SNP."),
+    ("counts", "SNP & node counts",
+     "How many SNPs were found (total/core/majority) and how many support each branch/leaf.",
+     "Quick numeric summaries — the headline counts are highlighted above."),
+    ("homoplasy", "Homoplasy (conflicting SNPs)",
+     "SNPs that don't fit one spot on the tree (recurrent mutation or recombination).",
+     "Lots of homoplasy = noisier signal; useful as a quality check."),
+    ("clusters", "Cluster / node membership",
+     "Which tree node or homoplasy group each SNP locus belongs to.",
+     "Advanced: tie a SNP back to a clade."),
+    ("vcf", "VCF variant files",
+     "SNPs in standard VCF format, relative to the first/reference genome.",
+     "Use with VCF-aware tools (IGV, bcftools). Only present with -vcf."),
+    ("other", "Logs & bookkeeping",
+     "Run log, input lists, the distance matrix, and unresolved_clusters "
+     "(genomes too similar to tell apart).",
+     "Check unresolved_clusters to see which genomes are indistinguishable."),
+]
+
+
+def _classify_file(name: str) -> str:
+    low = name.lower()
+    if low.endswith((".tre", ".nwk")):
+        return "tree"
+    if name.startswith("COUNT_Homoplastic") or name.startswith("Homoplasy_groups"):
+        return "homoplasy"
+    if name in ("COUNT_SNPs", "COUNT_coreSNPs") or name.startswith(("Node_SNP_counts", "tip_SNP_counts")):
+        return "counts"
+    if name.startswith("ClusterInfo"):
+        return "clusters"
+    if name.startswith("VCF") or low.endswith(".vcf"):
+        return "vcf"
+    if name == "NJ.dist.matrix":
+        return "other"
+    if "matrix" in low:
+        return "alignment"
+    if (name in ("SNPs_all", "core_SNPs", "nonCore_SNPs", "Annotation_summary")
+            or name.startswith("SNPs_in_majority") or low.endswith("_annotated")):
+        return "snp_info"
+    return "other"
+
+
 def harvest(run_dir: Path) -> Dict[str, Any]:
-    """Summarise the kSNP4 output dir (SNP counts + tree inventory)."""
-    res: Dict[str, Any] = {"snps_all": None, "core_snps": None, "trees": [], "matrices": [], "vcf": []}
+    """Summarise the kSNP4 output dir: SNP counts (all/core/non-core/majority),
+    tree inventory, and a plain-language file-group census."""
+    res: Dict[str, Any] = {
+        "snps_all": None, "core_snps": None, "non_core_snps": None,
+        "majority_snps": None, "majority_fraction": None,
+        "core_pct": None, "majority_pct": None,
+        "trees": [], "matrices": [], "vcf": [], "file_groups": {},
+    }
     if not run_dir.is_dir():
         return res
-    res["snps_all"] = _read_count(run_dir / "COUNT_SNPs")
-    res["core_snps"] = _read_count(run_dir / "COUNT_coreSNPs")
+
+    res["snps_all"] = _grab_int(_read_text(run_dir / "COUNT_SNPs"), r"(\d[\d,]*)")
+    core_txt = _read_text(run_dir / "COUNT_coreSNPs")
+    res["core_snps"] = _grab_int(core_txt, r"(?<!-)\bcore SNPs[:\s]+(\d[\d,]*)")
+    res["non_core_snps"] = _grab_int(core_txt, r"non-core SNPs[:\s]+(\d[\d,]*)")
+    res["majority_snps"] = _grab_int(core_txt, r"fraction\s+[0-9.]+\s+of genomes[:\s]+(\d[\d,]*)")
+    mfrac = re.search(r"fraction\s+([0-9.]+)\s+of genomes", core_txt, re.IGNORECASE)
+    if mfrac:
+        res["majority_fraction"] = float(mfrac.group(1))
+    if res["snps_all"]:
+        if res["core_snps"] is not None:
+            res["core_pct"] = round(res["core_snps"] / res["snps_all"] * 100, 1)
+        if res["majority_snps"] is not None:
+            res["majority_pct"] = round(res["majority_snps"] / res["snps_all"] * 100, 1)
+
+    groups: Dict[str, int] = {}
     for p in sorted(run_dir.rglob("*")):
         if not p.is_file():
             continue
         n = p.name
-        if n.endswith(".tre"):
+        g = _classify_file(n)
+        groups[g] = groups.get(g, 0) + 1
+        if g == "tree":
             res["trees"].append(n)
-        elif "matrix" in n.lower() and (n.endswith(".fasta") or n.endswith(".fa")):
+        elif "matrix" in n.lower() and n.lower().endswith((".fasta", ".fa")):
             res["matrices"].append(n)
-        elif n.startswith("VCF") or n.endswith(".vcf"):
+        elif g == "vcf":
             res["vcf"].append(n)
+    res["file_groups"] = groups
     return res
+
+
+def interpret(results: Dict[str, Any], kchooser: Dict[str, Any],
+              genome_count: int) -> Dict[str, Any]:
+    """Plain-language read on whether this is a good sample set for kSNP.
+
+    Thresholds from the kSNP4 User Guide / Gardner & Hall: FCK >= 0.1 implies
+    SNP-detection efficiency >97% and parsimony-tree accuracy >97%; a high core
+    fraction means closely-related, complete genomes (most trustworthy core
+    tree)."""
+    fck = kchooser.get("fck")
+    core_pct = results.get("core_pct")
+    level = "good"
+    points: List[str] = []
+
+    if fck is not None:
+        if fck >= 0.1:
+            points.append(
+                f"Relatedness (FCK = {fck}) is at or above 0.1 — the genomes share "
+                "enough sequence that kSNP should find >97% of SNPs and build an "
+                "accurate tree.")
+        else:
+            level = "caution"
+            points.append(
+                f"Relatedness (FCK = {fck}) is BELOW 0.1 — the genomes are quite "
+                "divergent, so fewer SNPs are found and the tree is less reliable. "
+                "Consider a more closely-related set, and read deep branches cautiously.")
+    else:
+        points.append("Relatedness (FCK) was not reported by Kchooser4.")
+
+    if core_pct is not None:
+        if core_pct >= 50:
+            points.append(
+                f"{core_pct}% of all SNPs are core (present in every genome) — a high "
+                "share means the genomes are closely related and the assemblies are "
+                "complete, so the core tree is the most trustworthy.")
+        else:
+            if level == "good":
+                level = "ok"
+            points.append(
+                f"Only {core_pct}% of SNPs are core — either the genomes are diverse "
+                "or some assemblies are incomplete (loci missing in some genomes). The "
+                "core tree rests on fewer SNPs; the majority tree is a useful middle ground.")
+
+    if genome_count and genome_count < 4:
+        if level == "good":
+            level = "ok"
+        points.append(
+            f"Only {genome_count} genomes — a tree needs at least ~4 to show meaningful "
+            "structure. Add more genomes for a useful phylogeny.")
+
+    headline = {
+        "good": "This looks like a good sample set for kSNP — proceed with confidence.",
+        "ok": "This sample set is usable; note the caveats below.",
+        "caution": "Review recommended — this set may be too divergent or incomplete for a confident tree.",
+    }[level]
+    return {"level": level, "headline": headline, "points": points,
+            "fck": fck, "core_pct": core_pct}
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +592,10 @@ def main(argv=None) -> int:
         log(f"WARNING: kSNP4 exited with code {rc}.")
     results = harvest(run_dir)
     log(f"  SNPs(all)={results['snps_all']}  coreSNPs={results['core_snps']}  "
+        f"majoritySNPs={results['majority_snps']}  "
         f"trees={len(results['trees'])}  matrices={len(results['matrices'])}  vcf={len(results['vcf'])}")
+    interpretation = interpret(results, kinfo, len(records))
+    log(f"  Sample-set read: {interpretation['headline']}")
 
     # ---- Step 6: provenance manifest ----
     step("Step 6: Writing provenance (run_manifest.json)")
@@ -478,6 +622,9 @@ def main(argv=None) -> int:
         "kchooser": {"optimum_k": kinfo.get("k"), "fck": kinfo.get("fck"),
                      "report": kinfo.get("report")},
         "results": results,
+        "interpretation": interpretation,
+        "file_guide": [{"key": k, "label": lbl, "what": what, "use": use}
+                       for (k, lbl, what, use) in FILE_GUIDE],
         "outputs": {
             "ksnp_run_dir": str(run_dir),
             "infile": str(infile),

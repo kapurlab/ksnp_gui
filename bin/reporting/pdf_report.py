@@ -82,7 +82,12 @@ def _banner(text: str, fill, ss) -> Table:
 
 def _grid(data, ss, col_in, small=False):
     style = ss["Small"] if small else ss["Cell"]
-    body = [[Paragraph(str(c), style) for c in row] for row in data]
+    # Header cells are Paragraph flowables, which ignore the table's TEXTCOLOR,
+    # so give the first row its own white, bold style for contrast on the teal.
+    hdr_style = ParagraphStyle("GridHdr", parent=style, textColor=colors.white,
+                               fontName="Helvetica-Bold")
+    body = [[Paragraph(str(c), hdr_style if i == 0 else style) for c in row]
+            for i, row in enumerate(data)]
     t = Table(body, colWidths=[c * inch for c in col_in], repeatRows=1)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), TEAL),
@@ -255,18 +260,53 @@ def write_pdf(ctx: Dict[str, Any], path: Path, outdir: Path) -> None:
     else:
         story.append(Paragraph("No per-genome QC available (seqkit not found at run time).", ss["Body"]))
 
-    # --- Results ---
-    story.append(Paragraph("SNP &amp; phylogeny results", ss["H2"]))
+    # --- Understanding your results: the three SNP counts, explained ---
+    interp = man.get("interpretation", {}) or {}
+    mfrac = res.get("majority_fraction") or opts.get("min_frac") or 0.8
+    story.append(Paragraph("Understanding your results", ss["H2"]))
+    story.append(Paragraph(
+        "A <b>SNP</b> (single-nucleotide polymorphism) is a single DNA letter that "
+        "differs between genomes. kSNP reports the SNPs three ways — think of them as "
+        "three widening circles of evidence:", ss["Body"]))
+    counts = [["SNP set", "Count", "% of all", "What it is — in plain terms"]]
+    counts.append([
+        "All", _i(res.get("snps_all")), "100%",
+        "Every SNP found in any genome (the pan-genome). The most data and the finest "
+        "detail, but some positions are missing in some genomes."])
+    counts.append([
+        "Core", _i(res.get("core_snps")),
+        (f"{res.get('core_pct')}%" if res.get("core_pct") is not None else "—"),
+        "SNPs present in EVERY genome — no missing data. The most trustworthy set; the "
+        "core tree is usually the one to believe when this share is high."])
+    counts.append([
+        f"Majority (≥{mfrac})", _i(res.get("majority_snps")),
+        (f"{res.get('majority_pct')}%" if res.get("majority_pct") is not None else "—"),
+        f"SNPs present in at least {int(float(mfrac)*100)}% of genomes. A middle ground — "
+        "more SNPs than core, less missing data than all."])
+    story.append(_grid(counts, ss, [1.1, 0.8, 0.7, 4.3], small=True))
+    story.append(Spacer(1, 6))
+
+    # Sample-set verdict banner + bullets
+    lvl = interp.get("level", "ok")
+    bfill = {"good": SUCCESS, "ok": WARN, "caution": DANGER}.get(lvl, WARN)
+    story.append(_banner(f"Is this a good sample set?  {interp.get('headline', '—')}", bfill, ss))
+    story.append(Spacer(1, 3))
+    for pt in (interp.get("points") or []):
+        story.append(Paragraph(f"• {pt}", ss["Small"]))
+    story.append(Paragraph(
+        "Rule of thumb: a high core % and FCK ≥ 0.1 mean the genomes are related "
+        "closely enough that kSNP finds &gt;97% of SNPs and the tree is accurate. A low "
+        "core % means the genomes are diverse or some assemblies are incomplete.",
+        ss["Small"]))
+    story.append(Spacer(1, 6))
+
+    # Run parameters (compact)
     story.append(_kv_table([
-        ("Total SNPs (pan-genome)", _i(res.get("snps_all"))),
-        ("Core SNPs (in all genomes)", _i(res.get("core_snps"))),
-        ("Optimum k (Kchooser4)", str(kch.get("optimum_k") or "—")),
-        ("k used", str(opts.get("k") or "—")),
-        ("FCK (fraction of core k-mers)", str(fck if fck is not None else "—")),
-        ("min_frac", str(opts.get("min_frac", "—"))),
-        ("Trees produced", ", ".join(res.get("trees") or []) or "—"),
-        ("SNP matrices", ", ".join(res.get("matrices") or []) or "—"),
-        ("VCF files", str(len(res.get("vcf") or [])) + " produced" if res.get("vcf") else "—"),
+        ("Optimum k (Kchooser4) / k used", f"{kch.get('optimum_k') or '—'} / {opts.get('k') or '—'}"),
+        ("FCK (relatedness; ≥0.1 is good)", str(fck if fck is not None else "—")),
+        ("min_frac (majority cutoff)", str(opts.get("min_frac", "—"))),
+        ("Trees produced", f"{len(res.get('trees') or [])} (.tre files)"),
+        ("SNP matrices / VCF files", f"{len(res.get('matrices') or [])} / {len(res.get('vcf') or [])}"),
     ], ss))
     figT = assets / "tree.png"
     ok, tree_name = _draw_tree(run_dir, figT)
@@ -278,6 +318,29 @@ def write_pdf(ctx: Dict[str, Any], path: Path, outdir: Path) -> None:
         story.append(Paragraph(
             f"Tree <b>{tree_name}</b> produced (rendering skipped — open the .tre in "
             "FigTree / iTOL).", ss["Small"]))
+
+    # --- Guide to the output files ---
+    guide = man.get("file_guide", []) or []
+    groups = res.get("file_groups", {}) or {}
+    if guide:
+        story.append(Paragraph("Guide to the output files", ss["H2"]))
+        story.append(Paragraph(
+            "kSNP writes many files. They fall into a few groups — here is what each "
+            "group is and when you'd open it, so the file count isn't overwhelming:",
+            ss["Body"]))
+        rows = [["File group", "n", "What it is  ·  when to use it"]]
+        for g in guide:
+            key = g.get("key")
+            if key == "report":
+                n = "2"
+            else:
+                n = str(groups.get(key, 0))
+            if key != "report" and groups.get(key, 0) == 0:
+                continue  # don't list groups this run didn't produce
+            rows.append([g.get("label", key), n,
+                         f"{g.get('what','')}  ·  {g.get('use','')}"])
+        story.append(_grid(rows, ss, [1.7, 0.35, 4.85], small=True))
+        story.append(Spacer(1, 8))
 
     # --- Methods & provenance ---
     story.append(Paragraph("Methods &amp; provenance", ss["H2"]))

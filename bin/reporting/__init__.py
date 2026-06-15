@@ -82,9 +82,16 @@ def build_stats_items(label: str, date_stamp: str, qc: Dict[str, Any],
     items.append(("k source", opts.get("k_source", "—")))
     items.append(("FCK (fraction of core k-mers)", str(kch.get("fck") if kch.get("fck") is not None else "—")))
 
-    # — kSNP results —
-    items.append(("Total SNPs (all)", _fmt_int(res.get("snps_all"))))
-    items.append(("Core SNPs", _fmt_int(res.get("core_snps"))))
+    # — kSNP results (the three headline SNP counts) —
+    interp = manifest.get("interpretation", {}) or {}
+    items.append(("Total SNPs — all (pan-genome)", _fmt_int(res.get("snps_all"))))
+    items.append(("Core SNPs (in every genome)", _fmt_int(res.get("core_snps"))))
+    items.append(("Core SNPs (% of all)", _fmt_pct(res.get("core_pct")) if res.get("core_pct") is not None else "—"))
+    mf = res.get("majority_fraction") or opts.get("min_frac")
+    items.append((f"Majority SNPs (in ≥{mf} of genomes)", _fmt_int(res.get("majority_snps"))))
+    items.append(("Majority SNPs (% of all)", _fmt_pct(res.get("majority_pct")) if res.get("majority_pct") is not None else "—"))
+    items.append(("Non-core SNPs", _fmt_int(res.get("non_core_snps"))))
+    items.append(("Sample-set assessment", interp.get("headline", "—")))
     items.append(("min_frac", str(opts.get("min_frac", "—"))))
     items.append(("Core analysis (-core)", "yes" if opts.get("core") else "no"))
     items.append(("ML tree (-ML)", "yes" if opts.get("ML") else "no"))

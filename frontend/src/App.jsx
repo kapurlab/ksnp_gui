@@ -532,6 +532,12 @@ export default function App() {
   const man = sum?.manifest || {};
   const qc = sum?.input_qc || {};
   const resFiles = selKey ? runResults[selKey] : null;
+  const rres = man.results || {};
+  const interp = man.interpretation || {};
+  const fileGuide = man.file_guide || [];
+  const fileGroups = rres.file_groups || {};
+  const mfrac = rres.majority_fraction ?? man.options?.min_frac ?? 0.8;
+  const lvlColor = { good: "#6BAA75", ok: "#D8B26E", caution: "#C46A6A" }[interp.level] || "#6E7B82";
 
   const inclCount = activeProject ? includedGenomes(activeProject).length : 0;
   const totalCount = activeProject ? (genomes[activeProject]?.length || 0) : 0;
@@ -1034,15 +1040,70 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Key metrics */}
-                  <div className="status-strip" style={{ marginBottom: 12 }}>
-                    <div className="status-item"><span className="status-label">Core SNPs</span><span className="status-value">{fmtInt(man.results?.core_snps)}</span></div>
-                    <div className="status-item"><span className="status-label">Total SNPs</span><span className="status-value">{fmtInt(man.results?.snps_all)}</span></div>
-                    <div className="status-item"><span className="status-label">k used</span><span className="status-value">{man.options?.k ?? "—"}</span></div>
-                    <div className="status-item"><span className="status-label">FCK</span><span className="status-value">{man.kchooser?.fck ?? "—"}</span></div>
-                    <div className="status-item"><span className="status-label">min_frac</span><span className="status-value">{man.options?.min_frac ?? "—"}</span></div>
-                    <div className="status-item"><span className="status-label">Trees</span><span className="status-value">{man.results?.trees?.length ?? 0}</span></div>
+                  {/* The three SNP counts — explained */}
+                  <div className="row-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+                    <div className="panel" style={{ padding: 12 }}>
+                      <div className="status-label">All SNPs</div>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtInt(rres.snps_all)}</div>
+                      <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Every SNP found in any genome (the pan-genome). Most data, finest detail — but some positions are missing in some genomes.</div>
+                    </div>
+                    <div className="panel" style={{ padding: 12, borderColor: "#4c8c8a" }}>
+                      <div className="status-label">Core SNPs {rres.core_pct != null && <span className="muted">· {rres.core_pct}% of all</span>}</div>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: "#4c8c8a" }}>{fmtInt(rres.core_snps)}</div>
+                      <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Present in <strong>every</strong> genome — no missing data. The most trustworthy set; the core tree is usually the one to believe.</div>
+                    </div>
+                    <div className="panel" style={{ padding: 12 }}>
+                      <div className="status-label">Majority SNPs (≥{mfrac}) {rres.majority_pct != null && <span className="muted">· {rres.majority_pct}% of all</span>}</div>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtInt(rres.majority_snps)}</div>
+                      <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Present in at least {Math.round(Number(mfrac) * 100)}% of genomes. A middle ground — more SNPs than core, less missing data than all.</div>
+                    </div>
                   </div>
+
+                  {/* Sample-set verdict */}
+                  {interp.headline && (
+                    <div style={{ borderLeft: `4px solid ${lvlColor}`, background: "var(--panel-2, #f6f5f2)", padding: "8px 12px", borderRadius: 6, marginBottom: 10 }}>
+                      <div style={{ fontWeight: 700, color: lvlColor }}>Is this a good sample set? {interp.headline}</div>
+                      {(interp.points || []).map((p, i) => (
+                        <div key={i} className="muted" style={{ fontSize: 12, marginTop: 4 }}>• {p}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Secondary metrics */}
+                  <div className="status-strip" style={{ marginBottom: 12 }}>
+                    <div className="status-item"><span className="status-label">k used</span><span className="status-value">{man.options?.k ?? "—"}</span></div>
+                    <div className="status-item"><span className="status-label">FCK (≥0.1 good)</span><span className="status-value">{man.kchooser?.fck ?? "—"}</span></div>
+                    <div className="status-item"><span className="status-label">min_frac</span><span className="status-value">{man.options?.min_frac ?? "—"}</span></div>
+                    <div className="status-item"><span className="status-label">Trees</span><span className="status-value">{rres.trees?.length ?? 0}</span></div>
+                    <div className="status-item"><span className="status-label">Non-core SNPs</span><span className="status-value">{fmtInt(rres.non_core_snps)}</span></div>
+                  </div>
+
+                  {/* Guide to the output files */}
+                  {fileGuide.length > 0 && (
+                    <details style={{ marginBottom: 12 }}>
+                      <summary style={{ cursor: "pointer", fontWeight: 600 }}>Guide to the output files — what's what (kSNP writes a lot of files)</summary>
+                      <div style={{ overflowX: "auto", marginTop: 8 }}>
+                        <table className="result-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ textAlign: "left", borderBottom: "2px solid var(--border, #ddd)" }}>
+                              <th style={{ padding: "6px 8px" }}>File group</th>
+                              <th style={{ padding: "6px 8px", textAlign: "right" }}>#</th>
+                              <th style={{ padding: "6px 8px" }}>What it is · when to use it</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fileGuide.filter((g) => g.key === "report" || (fileGroups[g.key] || 0) > 0).map((g) => (
+                              <tr key={g.key} style={{ borderBottom: "1px solid var(--border, #eee)" }}>
+                                <td style={{ padding: "5px 8px", fontWeight: 600 }}>{g.label}</td>
+                                <td style={{ padding: "5px 8px", textAlign: "right" }}>{g.key === "report" ? 2 : (fileGroups[g.key] || 0)}</td>
+                                <td style={{ padding: "5px 8px" }}><span>{g.what}</span> <span className="muted">{g.use}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
 
                   {/* Download links */}
                   {resFiles?.files?.length > 0 && (
