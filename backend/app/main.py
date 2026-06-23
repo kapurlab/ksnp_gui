@@ -1028,6 +1028,35 @@ def api_job_file(job_id: str, path: str = Query(...), inline: int = 0):
 
 
 # ---------------------------------------------------------------------------
+# Proxy-safe job log polling. The OOD /rnode Apache proxy buffers SSE streams
+# and corrupts concurrent sibling requests (a status poll comes back with the
+# SSE's buffered body, breaking JSON parsing -> successful runs mislabelled
+# "Failed"). This plain GET returns BOTH the recorded status (from the real
+# exit code) and the current log text, so one poll loop drives status + logs.
+# MUST be registered before the SPA catch-all mount below.
+# ---------------------------------------------------------------------------
+@app.get("/api/jobs/{job_id}/logtext")
+def job_logtext(job_id: str):
+    job = job_manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Job not found")
+    text = ""
+    try:
+        lp = job.get("log_path")
+        if lp and Path(lp).is_file():
+            text = Path(lp).read_text(encoding="utf-8", errors="replace")
+            if len(text) > 30000:   # keep polling cheap; show the tail
+                text = "...(earlier log truncated)...\n" + text[-30000:]
+    except OSError:
+        pass
+    return JSONResponse({
+        "status": job.get("status"),
+        "exit_code": job.get("exit_code"),
+        "log": text,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Static frontend — must be last
 # ---------------------------------------------------------------------------
 if _FRONTEND_DIST.is_dir():

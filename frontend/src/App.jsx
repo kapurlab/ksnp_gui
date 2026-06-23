@@ -85,6 +85,7 @@ export default function App() {
 
   const logRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const watchIdRef = useRef(null);
 
   const runKey = (project, lbl) => `${project}::${lbl}`;
   const genKey = (project, g) => `${project}::${g.path}`;
@@ -112,7 +113,7 @@ export default function App() {
           setRunning(true);
           const m = (live.name || "").match(/^(.*?)\/(.*?) — kSNP4/);
           if (m) setActiveRun({ project: m[1], label: m[2] });
-          streamLogUntilDone(live.id, m ? { project: m[1], label: m[2] } : null, () => {});
+          watchJob(live.id, m ? { project: m[1], label: m[2] } : null, () => {});
         }
       })
       .catch(() => {});
@@ -286,7 +287,7 @@ export default function App() {
       setJobId(data.job_id);
       setJobStatus("running");
       setLogLines([]);
-      streamLogUntilDone(data.job_id, null, () => {
+      watchJob(data.job_id, null, () => {
         setStat(name, "Download finished — see inputs below.");
         refreshAfterLoad(name);
       });
@@ -317,7 +318,7 @@ export default function App() {
       setJobId(data.job_id);
       setJobStatus("running");
       setLogLines([]);
-      streamLogUntilDone(data.job_id, null, () => {
+      watchJob(data.job_id, null, () => {
         setStat(name, "Genome download finished — see genomes below.");
         refreshAfterLoad(name);
       });
@@ -409,7 +410,7 @@ export default function App() {
         setSelectedRun({ project: activeProject, label: lbl });
         setShowResults(true);
         setJobId(job_id);
-        streamLogUntilDone(job_id, samp, () => {});
+        watchJob(job_id, samp, () => {});
       })
       .catch((err) => {
         setLogLines((prev) => [...prev, `ERROR: ${err.message}`]);
@@ -418,36 +419,58 @@ export default function App() {
       });
   }
 
-  function streamLogUntilDone(id, samp, done) {
-    const es = new EventSource(`./api/jobs/${id}/log`);
-    eventSourceRef.current = es;
-    es.onmessage = (evt) => {
-      const data = evt.data;
-      if (data === "[DONE]") {
-        es.close();
-        setRunning(false);
-        fetch(`./api/jobs/${id}`)
-          .then((r) => r.json())
-          .then((job) => {
-            setJobStatus(job.status);
-            setCurrentStep("");
-            if (samp && samp.label) {
-              loadRuns(samp.project);
-              loadRunSummary(samp.project, samp.label);
-              loadRunResults(samp.project, samp.label);
-            }
-            loadProjects();
-          })
-          .catch(() => {})
-          .finally(() => done && done());
-      } else {
-        setLogLines((prev) => [...prev, data]);
-        if (/Step \d+:/i.test(data) || /Pipeline completed/i.test(data)) {
-          setCurrentStep(data.trim().replace(/^#+\s*/, ""));
-        }
+  // Watch a job by POLLING a plain endpoint (no SSE/EventSource). The OOD /rnode
+  // Apache proxy holds SSE connections open and corrupts concurrent sibling
+  // requests (a status poll comes back with the SSE's buffered body, breaking
+  // JSON parsing -> kSNP runs were mislabelled "Failed" and results did not
+  // auto-refresh). /api/jobs/{id}/logtext is a normal GET returning BOTH the
+  // recorded status (from the real exit code) and the current log text, so one
+  // poll loop drives status + live-ish logs safely.
+  function watchJob(id, samp, done) {
+    watchIdRef.current = id;   // newest run wins; stale loops below bail out
+    let errors = 0;
+    let finished = false;
+    const finish = (status) => {
+      if (finished || watchIdRef.current !== id) { done && done(); return; }
+      finished = true;
+      setRunning(false);
+      setJobStatus(status);
+      setCurrentStep("");
+      // PRESERVED verbatim from the original [DONE] handler:
+      if (samp && samp.label) {
+        loadRuns(samp.project);
+        loadRunSummary(samp.project, samp.label);
+        loadRunResults(samp.project, samp.label);
       }
+      loadProjects();
+      done && done();
     };
-    es.onerror = () => { es.close(); setRunning(false); setJobStatus("failed"); done && done(); };
+    const tick = () => {
+      if (finished || watchIdRef.current !== id) return;
+      fetch(`./api/jobs/${id}/logtext`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("http " + r.status))))
+        .then((data) => {
+          errors = 0;
+          if (typeof data.log === "string") {
+            const lines = data.log.split("\n");
+            setLogLines(lines);
+            for (let i = lines.length - 1; i >= 0; i--) {
+              const d = lines[i];
+              if (/Step \d+:/i.test(d) || /Pipeline completed/i.test(d)) {
+                setCurrentStep(d.trim().replace(/^#+\s*/, "")); break;
+              }
+            }
+          }
+          if (!data.status || data.status === "running") { setTimeout(tick, 2000); return; }
+          finish(data.status);                  // succeeded | failed from the real exit code
+        })
+        .catch(() => {
+          errors += 1;
+          if (errors < 30) setTimeout(tick, 2000);   // keep waiting through transient blips
+          else finish("failed");
+        });
+    };
+    setTimeout(tick, 1200);
   }
 
   // ---- Results ----
