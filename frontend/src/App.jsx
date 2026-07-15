@@ -53,6 +53,12 @@ export default function App() {
   const [excluded, setExcluded] = useState({});      // `${project}::${path}` -> true
   const [runsByProj, setRunsByProj] = useState({});  // project -> [run]
 
+  // Sample Metadata pane (tree-tip labels; kSNP labels tips by filename)
+  const [metaDraft, setMetaDraft] = useState({});    // project -> { filename -> label }
+  const [metaBulk, setMetaBulk] = useState({});      // project -> bulk-paste text
+  const [metaApplying, setMetaApplying] = useState({});
+  const [showMetadata, setShowMetadata] = useState(true);
+
   // Run config
   const [label, setLabel] = useState("");
   const [minFrac, setMinFrac] = useState(0.8);
@@ -345,6 +351,61 @@ export default function App() {
       await refreshAfterLoad(name);
     } catch (e) {
       setStat(name, `Rename failed: ${e.message}`);
+    }
+  }
+
+  // ── Sample Metadata pane helpers ───────────────────────────────
+  // The draft label for a genome: an explicit edit, else its current stem.
+  function metaLabelOf(project, g) {
+    const d = metaDraft[project] || {};
+    return d[g.name] !== undefined ? d[g.name] : g.sample;
+  }
+  function setMetaLabel(project, filename, value) {
+    setMetaDraft((m) => ({ ...m, [project]: { ...(m[project] || {}), [filename]: value } }));
+  }
+  // Parse "current_stem<TAB or comma>label" lines into the draft, matching each
+  // line's first field against a genome stem or filename.
+  function loadBulkMetadata(project) {
+    const text = metaBulk[project] || "";
+    const list = genomes[project] || [];
+    const byStem = {};
+    list.forEach((g) => { byStem[g.sample.toLowerCase()] = g; byStem[g.name.toLowerCase()] = g; });
+    let matched = 0;
+    const next = { ...(metaDraft[project] || {}) };
+    text.split(/\r?\n/).forEach((line) => {
+      const parts = line.split(/\t|,/).map((s) => s.trim()).filter(Boolean);
+      if (parts.length < 2) return;
+      const g = byStem[parts[0].toLowerCase()];
+      if (g) { next[g.name] = parts.slice(1).join("_"); matched += 1; }
+    });
+    setMetaDraft((m) => ({ ...m, [project]: next }));
+    setStat(project, matched ? `Loaded ${matched} label(s) into the table — review, then Apply.` : "No pasted rows matched a genome name.");
+  }
+  async function applyMetadata(name) {
+    const list = genomes[name] || [];
+    const rows = list
+      .map((g) => ({ old: g.name, new: (metaLabelOf(name, g) || "").trim(), stem: g.sample }))
+      .filter((r) => r.new && r.new !== r.stem)
+      .map((r) => ({ old: r.old, new: r.new }));
+    if (!rows.length) { setStat(name, "No label changes to apply."); return; }
+    setMetaApplying((m) => ({ ...m, [name]: true }));
+    try {
+      const res = await fetch(`./api/projects/${encodeURIComponent(name)}/metadata/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setStat(name, `Apply failed: ${data.detail || res.status}`); return; }
+      const errs = (data.results || []).filter((r) => (r.status || "").startsWith("error"));
+      setStat(name, `Applied ${data.renamed} label(s).${errs.length ? ` ${errs.length} skipped (name conflict/invalid).` : ""}`);
+      setMetaDraft((m) => ({ ...m, [name]: {} }));
+      setMetaBulk((m) => ({ ...m, [name]: "" }));
+      await refreshAfterLoad(name);
+    } catch (e) {
+      setStat(name, `Apply failed: ${e.message}`);
+    } finally {
+      setMetaApplying((m) => ({ ...m, [name]: false }));
     }
   }
 
@@ -892,6 +953,81 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                )}
+              </section>
+
+              {/* Sample Metadata — tree-tip labels (kSNP labels tips by filename) */}
+              <section className="panel">
+                <div className="panel-header">
+                  <h2>Sample Metadata</h2>
+                  <button className="ghost action" onClick={() => setShowMetadata((v) => !v)}>
+                    {showMetadata ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {showMetadata && (
+                  !activeProject ? (
+                    <div className="empty-msg">Select a project to label its genomes.</div>
+                  ) : (genomes[activeProject]?.length || 0) === 0 ? (
+                    <div className="empty-msg">No genomes yet — add FASTA files from the Inputs pane above.</div>
+                  ) : (() => {
+                    const list = genomes[activeProject] || [];
+                    const pending = list.filter((g) => {
+                      const v = (metaLabelOf(activeProject, g) || "").trim();
+                      return v && v !== g.sample;
+                    }).length;
+                    return (
+                      <>
+                        <div className="form-hint" style={{ marginBottom: 8 }}>
+                          Give each genome a short, clear label — it becomes the tip name in the kSNP
+                          trees and matrices (kSNP labels tips by genome filename). Edit inline or paste
+                          a mapping below, then <strong>Apply labels</strong>. {" "}
+                          <span className="muted">{pending} of {list.length} pending change(s).</span>
+                        </div>
+                        <div style={{ overflowX: "auto", marginBottom: 10 }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                            <thead>
+                              <tr style={{ textAlign: "left", borderBottom: "2px solid var(--border, #ddd)" }}>
+                                <th style={{ padding: "4px 8px" }}>Current genome</th>
+                                <th style={{ padding: "4px 8px" }}>Tree label</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {list.map((g) => (
+                                <tr key={g.path} style={{ borderBottom: "1px solid var(--border, #eee)" }}>
+                                  <td style={{ padding: "3px 8px", fontFamily: "monospace" }} title={g.name}>{g.sample}</td>
+                                  <td style={{ padding: "3px 6px" }}>
+                                    <input
+                                      style={{ width: "100%", minWidth: 120, padding: "3px 6px", fontSize: 12, borderRadius: 6 }}
+                                      value={metaLabelOf(activeProject, g)}
+                                      placeholder="e.g. L4_H37Rv"
+                                      onChange={(e) => setMetaLabel(activeProject, g.name, e.target.value)}
+                                    />
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <details style={{ marginBottom: 8 }}>
+                          <summary style={{ cursor: "pointer", fontSize: 12 }}>Bulk paste (current name &nbsp;→&nbsp; label)</summary>
+                          <textarea
+                            rows={4}
+                            placeholder={"Paste tab- or comma-separated rows:\ncurrent_name\tlabel\nGCA_000195835_3\tL4_H37Rv"}
+                            value={metaBulk[activeProject] || ""}
+                            onChange={(e) => setMetaBulk((m) => ({ ...m, [activeProject]: e.target.value }))}
+                            style={{ width: "100%", resize: "vertical", fontFamily: "inherit", marginTop: 6 }}
+                          />
+                          <button className="ghost action" onClick={() => loadBulkMetadata(activeProject)}>Load into table</button>
+                        </details>
+                        <button
+                          onClick={() => applyMetadata(activeProject)}
+                          disabled={metaApplying[activeProject] || pending === 0}
+                        >
+                          {metaApplying[activeProject] ? "Applying…" : `Apply labels${pending ? ` (${pending})` : ""}`}
+                        </button>
+                      </>
+                    );
+                  })()
                 )}
               </section>
 

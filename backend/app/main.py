@@ -473,6 +473,62 @@ def api_project_input_rename(name: str, payload: RenameRequest):
     return JSONResponse({"old": old, "new": dst.name})
 
 
+class MetadataRow(BaseModel):
+    old: str            # current filename in download/ (e.g. GCA_000195835_3.fasta)
+    new: str            # desired tree label (extension optional; sanitised)
+
+
+class MetadataApplyRequest(BaseModel):
+    rows: List[MetadataRow]
+
+
+@app.post("/api/projects/{name}/metadata/apply")
+def api_project_metadata_apply(name: str, payload: MetadataApplyRequest):
+    """Batch-apply tree-tip labels. kSNP labels tips by genome filename, so a
+    label is applied by renaming the file (same as the per-row pencil). This is
+    the vSNP-style metadata pane's 'Apply' — one call for the whole set, with a
+    per-row result so the UI can report what changed / collided."""
+    project_dir = _get_project_dir(name)
+    if project_dir is None:
+        raise HTTPException(404, f"Project not found: {name}")
+    download_dir = project_dir / "download"
+    results: List[Dict[str, str]] = []
+    renamed = 0
+    for row in payload.rows or []:
+        old = (row.old or "").strip()
+        new_raw = (row.new or "").strip()
+        if not old or "/" in old or "\\" in old or old.startswith(".") or ".." in old:
+            results.append({"old": old, "status": "error: invalid source name"})
+            continue
+        src = download_dir / old
+        if not (src.is_file() or src.is_symlink()):
+            results.append({"old": old, "status": "error: file not found"})
+            continue
+        if not new_raw:
+            results.append({"old": old, "status": "skipped: empty label"})
+            continue
+        suffix = "".join(Path(old).suffixes) if old.lower().endswith(".fastq.gz") else Path(old).suffix
+        for ext in _FASTA_EXTS + (".fastq.gz",):
+            if new_raw.lower().endswith(ext):
+                new_raw = new_raw[: -len(ext)]
+                break
+        new_base = _sanitize_filename(new_raw)
+        if not new_base:
+            results.append({"old": old, "status": "error: empty after sanitising"})
+            continue
+        dst = download_dir / f"{new_base}{suffix}"
+        if dst == src:
+            results.append({"old": old, "new": dst.name, "status": "unchanged"})
+            continue
+        if dst.exists():
+            results.append({"old": old, "new": dst.name, "status": "error: name already exists"})
+            continue
+        src.rename(dst)
+        renamed += 1
+        results.append({"old": old, "new": dst.name, "status": "renamed"})
+    return JSONResponse({"renamed": renamed, "results": results})
+
+
 @app.get("/api/projects/{name}/samples")
 def api_project_samples(name: str):
     """List genome FASTAs in download/ (kSNP operates on FASTA assemblies)."""
