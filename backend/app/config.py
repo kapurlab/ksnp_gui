@@ -23,6 +23,7 @@ _DEFAULT_SHARED_PROJECTS_ROOT = (
 DEFAULTS: Dict[str, Any] = {
     "projects_root": str(Path.home() / "projects"),
     "shared_projects_root": _DEFAULT_SHARED_PROJECTS_ROOT,
+    "saved_project_roots": [],
     # kSNP run defaults — the validated NVSL workflow values.
     "min_frac": 0.8,
     "run_core": True,
