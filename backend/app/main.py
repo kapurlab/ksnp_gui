@@ -22,7 +22,9 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -59,6 +61,38 @@ _JOBS_DIR = _REPO_ROOT / "backend" / "jobs"
 
 # Accepted genome FASTA extensions. kSNP requires FASTA input.
 _FASTA_EXTS = (".fasta", ".fa", ".fna", ".fas", ".ffn", ".fsa")
+
+# ---------------------------------------------------------------------------
+# Is kSNP4 actually runnable here?
+#
+# kSNP4 is not a conda package — it's the kSNP4.1 Linux package that
+# deploy/install.sh unpacks into vendor/kSNP4-bin, which the launcher prepends to
+# PATH. vendor/ is gitignored, so a fresh clone or a feature worktree has none,
+# and the GUI would happily queue a job that could only ever exit 127.
+# ---------------------------------------------------------------------------
+_REQUIRED_TOOLS = ("kSNP4", "Kchooser4", "MakeKSNP4infile")
+
+
+def _ksnp_readiness() -> Dict[str, Any]:
+    missing = [t for t in _REQUIRED_TOOLS if shutil.which(t) is None]
+    if not missing:
+        return {"ready": True, "missing": [], "reason": ""}
+    if platform.system() != "Linux":
+        reason = (f"kSNP4 ships Linux-only binaries, so it cannot run on "
+                  f"{platform.system()}. Use the lab server or an OOD deployment "
+                  f"for kSNP analyses.")
+    else:
+        reason = ("kSNP4 is not installed here (missing: " + ", ".join(missing) + "). "
+                  "It is downloaded separately from conda into vendor/kSNP4-bin. "
+                  "Fix with:  bin/bdtools install ksnp_gui    "
+                  "Check with: bin/bdtools doctor ksnp_gui")
+    return {"ready": False, "missing": missing, "reason": reason}
+
+
+@app.get("/api/readiness")
+def api_readiness():
+    """Lets the GUI disable Run and explain why, instead of failing mid-analysis."""
+    return JSONResponse(_ksnp_readiness())
 
 # ---------------------------------------------------------------------------
 # App & job manager
@@ -565,6 +599,12 @@ class RunPayload(BaseModel):
 
 @app.post("/api/run")
 def api_run(payload: RunPayload):
+    # Refuse before creating a run dir or a job row: a queued job that can only
+    # exit 127 wastes the user's time and leaves a half-run to clean up.
+    readiness = _ksnp_readiness()
+    if not readiness["ready"]:
+        raise HTTPException(503, readiness["reason"])
+
     cfg = load_config()
     project_dir = _get_project_dir(payload.project)
     if project_dir is None:

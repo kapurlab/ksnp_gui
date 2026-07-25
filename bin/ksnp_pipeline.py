@@ -123,6 +123,24 @@ def _have(tool: str) -> bool:
     return shutil.which(tool) is not None
 
 
+# kSNP4 is not a conda package: it's the vendored SourceForge package that
+# deploy/install.sh unpacks into vendor/kSNP4-bin and the launcher prepends to
+# PATH. When that dir is missing, every one of these disappears at once.
+REQUIRED_TOOLS = ("kSNP4", "Kchooser4", "MakeKSNP4infile")
+
+
+def preflight() -> List[str]:
+    """Names of required kSNP4 programs that are not runnable. Empty == good.
+
+    Called before ANY output is created. Without this the run "succeeded": step 3
+    silently wrote the infile itself, step 4 warned about Kchooser4 and returned,
+    step 5's kSNP4 exited 127 with only a WARNING, and the pipeline still wrote
+    run_manifest.json + report.pdf and logged "Pipeline completed" — a finished
+    run with no SNPs, no tree, and nothing obviously wrong to the person reading
+    the report."""
+    return [t for t in REQUIRED_TOOLS if not _have(t)]
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -143,7 +161,9 @@ def _run(cmd: List[str], cwd: Optional[Path] = None, env: Optional[dict] = None,
         proc = subprocess.run([str(c) for c in cmd], cwd=str(cwd) if cwd else None, env=env)
         return proc.returncode, ""
     except FileNotFoundError:
-        log(f"ERROR: command not found: {cmd[0]}")
+        # Name where we looked: "command not found" on its own sends people hunting
+        # through conda, when the answer is almost always a missing vendor/kSNP4-bin.
+        log(f"ERROR: command not found: {cmd[0]} (not on PATH: {os.environ.get('PATH', '')})")
         return 127, ""
 
 
@@ -588,6 +608,30 @@ def main(argv=None) -> int:
     ap.add_argument("--threads", type=int, default=max(1, min(8, (os.cpu_count() or 4))))
     args = ap.parse_args(argv)
 
+    # ---- Step 0: is kSNP4 actually installed? ----
+    # Checked before anything touches disk, so a missing install leaves no run dir,
+    # no manifest and no report to mistake for a real (empty) result.
+    missing = preflight()
+    if missing:
+        log("=" * 70)
+        log(f"ERROR: kSNP4 is not installed here — missing: {', '.join(missing)}")
+        log("")
+        log("  kSNP4 is not a conda package. It is the kSNP4.1 Linux package,")
+        log("  downloaded from SourceForge into ksnp_gui/vendor/kSNP4-bin and added")
+        log("  to PATH at launch. An empty vendor/ (a fresh clone, or a feature")
+        log("  worktree — vendor/ is gitignored) produces exactly this.")
+        log("")
+        log("  Fix:  bin/bdtools install ksnp_gui     # downloads the package")
+        log("  Check: bin/bdtools doctor ksnp_gui")
+        log("  Note: kSNP4 ships Linux-only binaries — it cannot run on macOS.")
+        log("")
+        log(f"  PATH was: {os.environ.get('PATH', '')}")
+        missing_assets = os.environ.get("BDTOOLS_MISSING_ASSETS", "")
+        if missing_assets:
+            log(f"  The launcher already flagged this: missing {missing_assets}")
+        log("=" * 70)
+        return 3
+
     outdir: Path = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
     started = _now()
@@ -637,7 +681,7 @@ def main(argv=None) -> int:
     run_dir = outdir / "ksnp_run"
     rc, ksnp_argv = run_ksnp(infile, outdir, "ksnp_run", k, args.threads, args.min_frac, core, ml, vcf)
     if rc != 0:
-        log(f"WARNING: kSNP4 exited with code {rc}.")
+        log(f"ERROR: kSNP4 exited with code {rc} — this run produced no usable SNP output.")
     results = harvest(run_dir)
     log(f"  SNPs(all)={results['snps_all']}  coreSNPs={results['core_snps']}  "
         f"majoritySNPs={results['majority_snps']}  "
@@ -645,12 +689,25 @@ def main(argv=None) -> int:
     interpretation = interpret(results, kinfo, len(records))
     log(f"  Sample-set read: {interpretation['headline']}")
 
+    # kSNP4 can exit 0 having produced nothing usable. Two or more genomes with
+    # zero SNPs and no tree is not a result, it's a failure that happens to have a
+    # clean return code — say so rather than reporting it as a finished analysis.
+    no_output = (not results.get("snps_all")) and not results.get("trees")
+    failed = rc != 0 or no_output
+    if no_output and rc == 0:
+        log("ERROR: kSNP4 exited 0 but produced no SNPs and no trees. "
+            "Treating this as a failed run — check the kSNP4 output above.")
+    status = "failed" if failed else "completed"
+
     # ---- Step 6: provenance manifest ----
+    # Written even on failure: a failed run's provenance is worth as much as a
+    # successful one when working out why.
     step("Step 6: Writing provenance (run_manifest.json)")
     finished = _now()
     manifest: Dict[str, Any] = {
         "tool": "kSNP4",
         "label": args.label,
+        "status": status,
         "started_at": started,
         "finished_at": finished,
         "return_code": rc,
@@ -697,17 +754,27 @@ def main(argv=None) -> int:
     (outdir / "run_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     # ---- Step 7: report ----
-    step("Step 7: Building report (stats.xlsx + report.pdf)")
-    try:
-        import reporting  # bin/ is on PYTHONPATH
-        reporting.build(outdir, args.label, log=log)
-    except Exception as exc:  # noqa: BLE001 — never fail the run over the report
-        log(f"  WARNING: report generation failed: {exc}")
+    # Skipped on failure. A report over an empty run is the thing that made a
+    # broken install look like a finished analysis.
+    if failed:
+        step("Step 7: Report SKIPPED (failed run — nothing to report on)")
+    else:
+        step("Step 7: Building report (stats.xlsx + report.pdf)")
+        try:
+            import reporting  # bin/ is on PYTHONPATH
+            reporting.build(outdir, args.label, log=log)
+        except Exception as exc:  # noqa: BLE001 — never fail the run over the report
+            log(f"  WARNING: report generation failed: {exc}")
 
+    if failed:
+        step("Pipeline FAILED")
+        log(f"kSNP4 return code: {rc}")
+        log(f"Partial outputs (for diagnosis) in: {outdir}")
+        return rc if rc != 0 else 4
     step("Pipeline completed")
     log(f"kSNP4 return code: {rc}")
     log(f"Outputs in: {outdir}")
-    return 0 if rc == 0 else rc
+    return 0
 
 
 if __name__ == "__main__":

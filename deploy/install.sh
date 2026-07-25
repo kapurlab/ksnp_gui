@@ -138,7 +138,28 @@ else
     KSNP_EXE="$(find "${VENDOR_DIR}" -type f -name kSNP4 ! -path "${KSNP_LINK}/*" 2>/dev/null | head -1)"
     [[ -n "${KSNP_EXE}" ]] || die "kSNP4 executable not found after unzip. Inspect ${VENDOR_DIR}."
     KSNP_PKG_DIR="$(dirname "${KSNP_EXE}")"
-    chmod -R u+rx "${KSNP_PKG_DIR}" 2>/dev/null || true
+    # The archive unpacks with group/other stripped: the package dir arrives
+    # drwxr-Sr-- (not traversable) and Kchooser4/MakeKSNP4infile arrive -rwxr--r--.
+    # On a shared server that means only the installing account can run kSNP4 —
+    # every other user hits the identical "not on PATH" failure despite a correct
+    # PATH. Capital X sets +x on directories and on files that already have some
+    # +x, so data files stay non-executable.
+    chmod -R a+rX,go-w "${KSNP_PKG_DIR}" 2>/dev/null || true
+    # ...and on every ancestor, or the executables stay unreachable anyway.
+    _anc="${KSNP_PKG_DIR}"
+    while [[ "${_anc}" == "${VENDOR_DIR}"?* ]]; do
+      chmod a+rx "${_anc}" 2>/dev/null || true
+      _anc="$(dirname "${_anc}")"
+    done
+    chmod a+rx "${VENDOR_DIR}" 2>/dev/null || true
+    # Fail rather than warn — a silently unreadable install IS the bug.
+    _unreadable="$(find "${KSNP_PKG_DIR}" -maxdepth 1 \
+        \( -type d -o -name 'kSNP4*' -o -name 'Kchooser4' -o -name 'MakeKSNP4infile' \) \
+        ! -perm -o+rx 2>/dev/null | head -5)"
+    [[ -z "${_unreadable}" ]] || die "kSNP4 files are not readable/executable by other accounts:
+${_unreadable}
+Re-run as the owner of ${KSNP_PKG_DIR}, or fix with:
+  chmod -R a+rX,go-w '${KSNP_PKG_DIR}'"
     rm -f "${KSNP_LINK}"
     ln -s "${KSNP_PKG_DIR}" "${KSNP_LINK}"
     ok "kSNP4 executables: ${KSNP_PKG_DIR}"

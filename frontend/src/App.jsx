@@ -70,6 +70,7 @@ export default function App() {
   const [threads, setThreads] = useState("");
 
   const [running, setRunning] = useState(false);
+  const [readiness, setReadiness] = useState(null);   // {ready, missing[], reason}
   const [jobId, setJobId] = useState(null);
   const [jobStatus, setJobStatus] = useState("idle");
   const [logLines, setLogLines] = useState([]);
@@ -107,6 +108,12 @@ export default function App() {
         if (cfg.run_vcf != null) setRunVcf(!!cfg.run_vcf);
         if (cfg.threads) setThreads(String(cfg.threads));
       })
+      .catch(() => {});
+    // Is kSNP4 itself present? It's downloaded outside conda, so the tool can be
+    // running perfectly while the analysis engine is missing.
+    fetch("./api/readiness")
+      .then((r) => r.json())
+      .then(setReadiness)
       .catch(() => {});
     loadProjects();
     fetch("./api/jobs")
@@ -1110,6 +1117,16 @@ export default function App() {
             <section className="panel">
               <h2>Configure &amp; Run</h2>
 
+              {/* kSNP4 is downloaded separately from conda, so it can be absent
+                  even when the tool itself starts fine. Say so up front instead of
+                  letting the run fail with "command not found" partway through. */}
+              {readiness && !readiness.ready && (
+                <div className="note warning" style={{ marginBottom: 12 }}>
+                  <strong>kSNP4 is not available on this machine.</strong>
+                  <div style={{ marginTop: 4 }}>{readiness.reason}</div>
+                </div>
+              )}
+
               <div className="form-section">
                 <label className="form-label">Run label (output folder name)</label>
                 <input
@@ -1158,7 +1175,9 @@ export default function App() {
                        onChange={(e) => setThreads(e.target.value)} disabled={running} />
               </div>
 
-              <button className="run-btn" onClick={runProject} disabled={running || inclCount < 2}>
+              <button className="run-btn" onClick={runProject}
+                      disabled={running || inclCount < 2 || (readiness && !readiness.ready)}
+                      title={readiness && !readiness.ready ? readiness.reason : undefined}>
                 {running ? "Running…" : `▶ Run kSNP4${inclCount ? ` (${inclCount} genomes)` : ""}`}
               </button>
               {inclCount < 2 && <div className="note">Select at least 2 genomes in the active project to enable the run.</div>}
