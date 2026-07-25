@@ -88,18 +88,18 @@ def _ksnp_readiness() -> Dict[str, Any]:
                   "Check with: bin/bdtools doctor ksnp_gui")
     return {"ready": False, "missing": missing, "reason": reason}
 
-
-@app.get("/api/readiness")
-def api_readiness():
-    """Lets the GUI disable Run and explain why, instead of failing mid-analysis."""
-    return JSONResponse(_ksnp_readiness())
-
 # ---------------------------------------------------------------------------
 # App & job manager
 # ---------------------------------------------------------------------------
 app = FastAPI(title="kSNP4 GUI")
 install_request_safety(app)
 job_manager = JobManager(_JOBS_DIR)
+
+
+@app.get("/api/readiness")
+def api_readiness():
+    """Lets the GUI disable Run and explain why, instead of failing mid-analysis."""
+    return JSONResponse(_ksnp_readiness())
 
 _SCOPE_SHARED = "shared"
 _SCOPE_PERSONAL = "personal"
