@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import ThemeToggle from "./ThemeToggle";
+import ResultsPane from "./ResultsPane";
+import { useResults } from "./useResults";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,12 +37,25 @@ function fmtInt(v) {
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
+// The tool-specific columns of the shared Results table. Everything else
+// about the pane is identical across the suite.
+const RESULT_COLUMNS = [
+  { key: "genomes", label: "Genomes", align: "right" },
+  { key: "k", label: "k", align: "right" },
+  { key: "snps", label: "SNPs", align: "right" },
+  { key: "core", label: "Core SNPs", align: "right" },
+];
+
 export default function App() {
   const [projects, setProjects] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [newProjectName, setNewProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const [activeProject, setActiveProject] = useState("");
+  /* Every completed run for the active project. Refreshed when a run
+     finishes rather than polled, matching the rest of the suite. */
+  const results = useResults(activeProject);
+  const [showResultsPane, setShowResultsPane] = useState(true);
   const [addPath, setAddPath] = useState({});
   const [sraText, setSraText] = useState({});
   const [accText, setAccText] = useState({});        // FASTA-by-accession (GCA/GCF/nucleotide)
@@ -116,6 +131,9 @@ export default function App() {
       .then(setReadiness)
       .catch(() => {});
     loadProjects();
+    // The Results table is where finished work is now read, so it
+    // has to reflect the run that just ended.
+    results.reload();
     fetch("./api/jobs")
       .then((r) => r.json())
       .then((jobs) => {
@@ -1112,7 +1130,7 @@ export default function App() {
           <button className="ghost" onClick={() => setShowRun(!showRun)}>{showRun ? "Hide" : "Show"}</button>
         </div>
         {showRun && (
-          <div className="row-grid row-grid-split">
+          <div className="row-grid row-grid-single">
             {/* LEFT — configure & run */}
             <section className="panel">
               <h2>Configure &amp; Run</h2>
@@ -1184,30 +1202,7 @@ export default function App() {
             </section>
 
             {/* RIGHT — current run status */}
-            <section className="panel">
-              <div className="panel-header">
-                <h2>Current run</h2>
-                {jobId && <span className="muted" style={{ fontSize: 12 }}>job {jobId.slice(0, 8)}</span>}
-              </div>
-              {activeRun ? (
-                <div className="selection-box">
-                  <div className="sel-title">
-                    {jobStatus === "running" ? "Running" : jobStatus === "succeeded" ? "Done" : jobStatus}
-                  </div>
-                  <div><span className="sel-name">{activeRun.label}</span></div>
-                  <div style={{ marginTop: 2 }}><span className="muted">Project:</span> <strong>{activeRun.project}</strong></div>
-                  {activeRun.genome_count != null && (
-                    <div className="muted" style={{ marginTop: 2 }}>{activeRun.genome_count} genomes</div>
-                  )}
-                  {currentStep && <div className="muted" style={{ marginTop: 4 }}>{currentStep}</div>}
-                  <div className="note" style={{ marginTop: 8 }}>
-                    Trees, matrices, the PDF report and stats workbook appear in the Results section below when finished.
-                  </div>
-                </div>
-              ) : (
-                <div className="empty-msg">No active run. Select genomes, set options, and Run kSNP4.</div>
-              )}
-            </section>
+
           </div>
         )}
 
@@ -1394,6 +1389,52 @@ export default function App() {
                 </>
               )}
             </section>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════ */}
+        {/* SECTION: Results — every completed run, not just the last  */}
+        {/* ════════════════════════════════════════════════════════ */}
+        <div className="row-header">
+          <h2>Results</h2>
+          <button className="ghost" onClick={() => setShowResultsPane(!showResultsPane)}>
+            {showResultsPane ? "Hide" : "Show"}
+          </button>
+        </div>
+        {showResultsPane && (
+          <div className="row-grid row-grid-split">
+            {/* LEFT — Current Run (live status for the batch in flight) */}
+<section className="panel">
+              <div className="panel-header">
+                <h2>Current Run</h2>
+                {jobId && <span className="muted" style={{ fontSize: 12 }}>job {jobId.slice(0, 8)}</span>}
+              </div>
+              {activeRun ? (
+                <div className="selection-box">
+                  <div className="sel-title">
+                    {jobStatus === "running" ? "Running" : jobStatus === "succeeded" ? "Done" : jobStatus}
+                  </div>
+                  <div><span className="sel-name">{activeRun.label}</span></div>
+                  <div style={{ marginTop: 2 }}><span className="muted">Project:</span> <strong>{activeRun.project}</strong></div>
+                  {activeRun.genome_count != null && (
+                    <div className="muted" style={{ marginTop: 2 }}>{activeRun.genome_count} genomes</div>
+                  )}
+                  {currentStep && <div className="muted" style={{ marginTop: 4 }}>{currentStep}</div>}
+                  <div className="note" style={{ marginTop: 8 }}>
+                    Trees, matrices, the PDF report and stats workbook appear in the Results section below when finished.
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-msg">No active run. Select genomes, set options, and Run kSNP4.</div>
+              )}
+            </section>
+            {/* RIGHT — every completed run, searchable (vSNP Step 1 model) */}
+            <ResultsPane
+              project={activeProject}
+              results={results}
+              columns={RESULT_COLUMNS}
+              labels={{ entity: "run", sampleHeader: "Run" }}
+            />
           </div>
         )}
 
