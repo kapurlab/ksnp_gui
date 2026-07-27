@@ -75,6 +75,7 @@ export default function App() {
   const [metaBulk, setMetaBulk] = useState({});      // project -> bulk-paste text
   const [metaApplying, setMetaApplying] = useState({});
   const [showMetadata, setShowMetadata] = useState(true);
+  const [showSelected, setShowSelected] = useState(true);
 
   // Run config
   const [label, setLabel] = useState("");
@@ -789,6 +790,7 @@ export default function App() {
           </button>
         </div>
         {showProjects && (
+          <>
           <div className="row-grid row-grid-split">
             {/* LEFT — project / genome browser */}
             <section className="panel">
@@ -1027,102 +1029,109 @@ export default function App() {
                 )}
               </section>
 
-              {/* Sample Metadata — tree-tip labels (kSNP labels tips by filename) */}
-              <section className="panel">
-                <div className="panel-header">
-                  <h2>Sample Metadata</h2>
-                  <button className="ghost action" onClick={() => setShowMetadata((v) => !v)}>
-                    {showMetadata ? "Hide" : "Show"}
-                  </button>
-                </div>
-                {showMetadata && (
-                  !activeProject ? (
-                    <div className="empty-msg">Select a project to label its genomes.</div>
-                  ) : (genomes[activeProject]?.length || 0) === 0 ? (
-                    <div className="empty-msg">No genomes yet — add FASTA files from the Inputs pane above.</div>
-                  ) : (() => {
-                    const list = genomes[activeProject] || [];
-                    const pending = list.filter((g) => {
-                      const v = (metaLabelOf(activeProject, g) || "").trim();
-                      return v && v !== g.sample;
-                    }).length;
-                    return (
-                      <>
-                        <div className="form-hint" style={{ marginBottom: 8 }}>
-                          Give each genome a short, clear label — it becomes the tip name in the kSNP
-                          trees and matrices (kSNP labels tips by genome filename). Edit inline or paste
-                          a mapping below, then <strong>Apply labels</strong>. {" "}
-                          <span className="muted">{pending} of {list.length} pending change(s).</span>
-                        </div>
-                        <div style={{ overflowX: "auto", marginBottom: 10 }}>
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                            <thead>
-                              <tr style={{ textAlign: "left", borderBottom: "2px solid var(--border, #ddd)" }}>
-                                <th style={{ padding: "4px 8px" }}>Current genome</th>
-                                <th style={{ padding: "4px 8px" }}>Tree label</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {list.map((g) => (
-                                <tr key={g.path} style={{ borderBottom: "1px solid var(--border, #eee)" }}>
-                                  <td style={{ padding: "3px 8px", fontFamily: "monospace" }} title={g.name}>{g.sample}</td>
-                                  <td style={{ padding: "3px 6px" }}>
-                                    <input
-                                      style={{ width: "100%", minWidth: 120, padding: "3px 6px", fontSize: 12, borderRadius: 6 }}
-                                      value={metaLabelOf(activeProject, g)}
-                                      placeholder="e.g. L4_H37Rv"
-                                      onChange={(e) => setMetaLabel(activeProject, g.name, e.target.value)}
-                                    />
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <details style={{ marginBottom: 8 }}>
-                          <summary style={{ cursor: "pointer", fontSize: 12 }}>Bulk paste (current name &nbsp;→&nbsp; label)</summary>
-                          <textarea
-                            rows={4}
-                            placeholder={"Paste tab- or comma-separated rows:\ncurrent_name\tlabel\nGCA_000195835_3\tL4_H37Rv"}
-                            value={metaBulk[activeProject] || ""}
-                            onChange={(e) => setMetaBulk((m) => ({ ...m, [activeProject]: e.target.value }))}
-                            style={{ width: "100%", resize: "vertical", fontFamily: "inherit", marginTop: 6 }}
-                          />
-                          <button className="ghost action" onClick={() => loadBulkMetadata(activeProject)}>Load into table</button>
-                        </details>
-                        <button
-                          onClick={() => applyMetadata(activeProject)}
-                          disabled={metaApplying[activeProject] || pending === 0}
-                        >
-                          {metaApplying[activeProject] ? "Applying…" : `Apply labels${pending ? ` (${pending})` : ""}`}
-                        </button>
-                      </>
-                    );
-                  })()
-                )}
-              </section>
-
-              <section className="panel">
-                <div className="panel-header">
-                  <h2>Genomes selected for run</h2>
-                </div>
-                {!activeProject || totalCount === 0 ? (
-                  <div className="empty-msg">Add FASTA genomes to a project, then they appear here. Uncheck any to exclude from the run.</div>
-                ) : (
-                  <div className="selection-box">
-                    <div className="sel-title">{inclCount} of {totalCount} genome(s) — project {activeProject}</div>
-                    {includedGenomes(activeProject).map((g) => (
-                      <div key={g.path} className="sel-row" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span className="sel-name" style={{ flex: 1 }}>{g.sample}</span>
-                        <button className="ghost" style={{ fontSize: 11 }} onClick={() => toggleExclude(activeProject, g)} title="Exclude">✕</button>
-                      </div>
-                    ))}
-                    {inclCount < 2 && <div className="note" style={{ marginTop: 6 }}>kSNP needs at least 2 genomes.</div>}
-                  </div>
-                )}
-              </section>
             </div>
           </div>
+
+          {/* Sample Metadata — tree-tip labels (kSNP labels tips by filename) */}
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Sample Metadata</h2>
+              <button className="ghost action" onClick={() => setShowMetadata((v) => !v)}>
+                {showMetadata ? "Hide" : "Show"}
+              </button>
+            </div>
+            {showMetadata && (
+              !activeProject ? (
+                <div className="empty-msg">Select a project to label its genomes.</div>
+              ) : (genomes[activeProject]?.length || 0) === 0 ? (
+                <div className="empty-msg">No genomes yet — add FASTA files from the Inputs pane above.</div>
+              ) : (() => {
+                const list = genomes[activeProject] || [];
+                const pending = list.filter((g) => {
+                  const v = (metaLabelOf(activeProject, g) || "").trim();
+                  return v && v !== g.sample;
+                }).length;
+                return (
+                  <>
+                    <div className="form-hint" style={{ marginBottom: 8 }}>
+                      Give each genome a short, clear label — it becomes the tip name in the kSNP
+                      trees and matrices (kSNP labels tips by genome filename). Edit inline or paste
+                      a mapping below, then <strong>Apply labels</strong>. {" "}
+                      <span className="muted">{pending} of {list.length} pending change(s).</span>
+                    </div>
+                    <div style={{ overflowX: "auto", marginBottom: 10 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ textAlign: "left", borderBottom: "2px solid var(--border, #ddd)" }}>
+                            <th style={{ padding: "4px 8px" }}>Current genome</th>
+                            <th style={{ padding: "4px 8px" }}>Tree label</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {list.map((g) => (
+                            <tr key={g.path} style={{ borderBottom: "1px solid var(--border, #eee)" }}>
+                              <td style={{ padding: "3px 8px", fontFamily: "monospace" }} title={g.name}>{g.sample}</td>
+                              <td style={{ padding: "3px 6px" }}>
+                                <input
+                                  style={{ width: "100%", minWidth: 120, padding: "3px 6px", fontSize: 12, borderRadius: 6 }}
+                                  value={metaLabelOf(activeProject, g)}
+                                  placeholder="e.g. L4_H37Rv"
+                                  onChange={(e) => setMetaLabel(activeProject, g.name, e.target.value)}
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <details style={{ marginBottom: 8 }}>
+                      <summary style={{ cursor: "pointer", fontSize: 12 }}>Bulk paste (current name &nbsp;→&nbsp; label)</summary>
+                      <textarea
+                        rows={4}
+                        placeholder={"Paste tab- or comma-separated rows:\ncurrent_name\tlabel\nGCA_000195835_3\tL4_H37Rv"}
+                        value={metaBulk[activeProject] || ""}
+                        onChange={(e) => setMetaBulk((m) => ({ ...m, [activeProject]: e.target.value }))}
+                        style={{ width: "100%", resize: "vertical", fontFamily: "inherit", marginTop: 6 }}
+                      />
+                      <button className="ghost action" onClick={() => loadBulkMetadata(activeProject)}>Load into table</button>
+                    </details>
+                    <button
+                      onClick={() => applyMetadata(activeProject)}
+                      disabled={metaApplying[activeProject] || pending === 0}
+                    >
+                      {metaApplying[activeProject] ? "Applying…" : `Apply labels${pending ? ` (${pending})` : ""}`}
+                    </button>
+                  </>
+                );
+              })()
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Genomes selected for run</h2>
+              <button className="ghost action" onClick={() => setShowSelected((v) => !v)}>
+                {showSelected ? "Hide" : "Show"}
+              </button>
+            </div>
+            {showSelected && (
+              !activeProject || totalCount === 0 ? (
+                <div className="empty-msg">Add FASTA genomes to a project, then they appear here. Uncheck any to exclude from the run.</div>
+              ) : (
+                <div className="selection-box">
+                  <div className="sel-title">{inclCount} of {totalCount} genome(s) — project {activeProject}</div>
+                  {includedGenomes(activeProject).map((g) => (
+                    <div key={g.path} className="sel-row" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="sel-name" style={{ flex: 1 }}>{g.sample}</span>
+                      <button className="ghost" style={{ fontSize: 11 }} onClick={() => toggleExclude(activeProject, g)} title="Exclude">✕</button>
+                    </div>
+                  ))}
+                  {inclCount < 2 && <div className="note" style={{ marginTop: 6 }}>kSNP needs at least 2 genomes.</div>}
+                </div>
+              )
+            )}
+          </section>
+          </>
         )}
 
         {/* ════ Run kSNP4 ════ */}
