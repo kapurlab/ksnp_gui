@@ -77,6 +77,60 @@ export default function App() {
   const [showMetadata, setShowMetadata] = useState(true);
   const [showSelected, setShowSelected] = useState(true);
 
+  // Width of the Sample Metadata table's first column, as a % of the table.
+  //
+  // The table was `table-layout: auto`, so the browser sized columns to content —
+  // and MTBC genome filenames run to ~70 characters, so "Current genome" took
+  // nearly all the width and the Tree label input was clipped to a few visible
+  // characters. You cannot check a label you cannot read. The divider is now
+  // draggable and the choice is remembered per browser; 45% leaves the label field
+  // usable at the default width.
+  const META_COL_DEFAULT = 45;
+  const META_COL_KEY = "ksnp_gui.metaColPct";
+  const [metaColPct, setMetaColPct] = useState(() => {
+    try {
+      const v = parseFloat(window.localStorage.getItem(META_COL_KEY));
+      return Number.isFinite(v) && v >= 15 && v <= 85 ? v : META_COL_DEFAULT;
+    } catch {
+      return META_COL_DEFAULT;   // private mode / storage disabled
+    }
+  });
+  const metaTableRef = useRef(null);
+  // Mirrors metaColPct so RELATIVE adjustments read the live value. Reading the
+  // state variable instead meant several events in one tick all saw the same stale
+  // closure: three ArrowRight presses (or one held key) moved 2% total, not 6%.
+  const metaColPctRef = useRef(metaColPct);
+
+  // Single writer for the column width. `persist` is false during a drag — writing
+  // localStorage on every pointermove is pointless churn; the pointerup commits.
+  const applyMetaColPct = (pct, persist = true) => {
+    const clamped = Math.min(85, Math.max(15, pct));
+    metaColPctRef.current = clamped;
+    setMetaColPct(clamped);
+    if (persist) {
+      try { window.localStorage.setItem(META_COL_KEY, String(clamped)); } catch { /* non-fatal */ }
+    }
+  };
+
+  // Pointer events, not mouse events: one code path covers mouse, trackpad and
+  // touch, and listening on window keeps the drag alive when the cursor moves off
+  // the 9px handle — which it will, constantly.
+  const startMetaColDrag = (e) => {
+    e.preventDefault();
+    const table = metaTableRef.current;
+    if (!table) return;
+    const rect = table.getBoundingClientRect();
+    const pctAt = (clientX) => ((clientX - rect.left) / rect.width) * 100;
+    const onMove = (ev) => applyMetaColPct(pctAt(ev.clientX), false);
+    const onUp = (ev) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      applyMetaColPct(pctAt(ev.clientX));
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
   // Run config
   const [label, setLabel] = useState("");
   const [minFrac, setMinFrac] = useState(0.8);
@@ -1059,21 +1113,71 @@ export default function App() {
                       a mapping below, then <strong>Apply labels</strong>. {" "}
                       <span className="muted">{pending} of {list.length} pending change(s).</span>
                     </div>
-                    <div style={{ overflowX: "auto", marginBottom: 10 }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <div style={{ marginBottom: 10 }}>
+                      {/* tableLayout: fixed so the colgroup below actually governs the
+                          split. With auto layout the browser sizes to content, which is
+                          what buried the Tree label behind 70-character filenames. */}
+                      <table
+                        ref={metaTableRef}
+                        style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}
+                      >
+                        <colgroup>
+                          <col style={{ width: `${metaColPct}%` }} />
+                          <col />
+                        </colgroup>
                         <thead>
                           <tr style={{ textAlign: "left", borderBottom: "2px solid var(--border, #ddd)" }}>
-                            <th style={{ padding: "4px 8px" }}>Current genome</th>
+                            <th style={{ padding: "4px 8px", position: "relative" }}>
+                              Current genome
+                              {/* Drag handle, straddling the column edge. role=separator +
+                                  arrow keys so it is usable without a mouse; double-click
+                                  restores the default. */}
+                              <div
+                                role="separator"
+                                aria-orientation="vertical"
+                                aria-label="Resize the Current genome column"
+                                aria-valuenow={Math.round(metaColPct)}
+                                aria-valuemin={15}
+                                aria-valuemax={85}
+                                tabIndex={0}
+                                title="Drag to resize • double-click to reset"
+                                onPointerDown={startMetaColDrag}
+                                onDoubleClick={() => applyMetaColPct(META_COL_DEFAULT)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "ArrowLeft") { e.preventDefault(); applyMetaColPct(metaColPctRef.current - 2); }
+                                  else if (e.key === "ArrowRight") { e.preventDefault(); applyMetaColPct(metaColPctRef.current + 2); }
+                                  else if (e.key === "Home") { e.preventDefault(); applyMetaColPct(META_COL_DEFAULT); }
+                                }}
+                                style={{
+                                  position: "absolute", top: 0, right: -5, width: 9, height: "100%",
+                                  cursor: "col-resize", touchAction: "none",
+                                  display: "flex", alignItems: "center", justifyContent: "center",
+                                  zIndex: 1,
+                                }}
+                              >
+                                <span style={{ width: 2, height: "70%", background: "var(--border, #ddd)", borderRadius: 1 }} />
+                              </div>
+                            </th>
                             <th style={{ padding: "4px 8px" }}>Tree label</th>
                           </tr>
                         </thead>
                         <tbody>
                           {list.map((g) => (
                             <tr key={g.path} style={{ borderBottom: "1px solid var(--border, #eee)" }}>
-                              <td style={{ padding: "3px 8px", fontFamily: "monospace" }} title={g.name}>{g.sample}</td>
+                              {/* Fixed layout means long names must be told what to do:
+                                  ellipsis, with the full name on hover (title). */}
+                              <td
+                                style={{
+                                  padding: "3px 8px", fontFamily: "monospace",
+                                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                }}
+                                title={g.name}
+                              >
+                                {g.sample}
+                              </td>
                               <td style={{ padding: "3px 6px" }}>
                                 <input
-                                  style={{ width: "100%", minWidth: 120, padding: "3px 6px", fontSize: 12, borderRadius: 6 }}
+                                  style={{ width: "100%", minWidth: 0, padding: "3px 6px", fontSize: 12, borderRadius: 6 }}
                                   value={metaLabelOf(activeProject, g)}
                                   placeholder="e.g. L4_H37Rv"
                                   onChange={(e) => setMetaLabel(activeProject, g.name, e.target.value)}
