@@ -58,6 +58,23 @@ esac
 # SourceForge direct-download (follows mirror redirects with curl -L).
 KSNP_URL="${KSNP_URL:-https://sourceforge.net/projects/ksnp/files/kSNP4.1%20${KSNP_OS_LABEL}%20package.zip/download}"
 
+# Is this file a complete, readable zip archive?
+#
+# `unzip -t` reads the central directory and CRC-checks every member, which is the
+# only cheap way to tell a finished 1 GB download from a truncated one — file size
+# alone cannot, and SourceForge sometimes serves an HTML error page with a 200.
+zip_is_complete() {
+  [[ -s "$1" ]] || return 1
+  command -v unzip >/dev/null 2>&1 || return 0   # can't verify; don't block on it
+  unzip -t -qq "$1" >/dev/null 2>&1
+}
+
+# Human-readable size of a file, for progress messages. Portable: BSD stat and GNU
+# stat take different flags, so ask du.
+_human_size() {
+  du -h "$1" 2>/dev/null | awk 'NR==1{print $1}' || echo "?"
+}
+
 # Can this host exec the compiled kSNP4 binaries in DIR?
 #
 # Delegated to bin/ksnp_platform.py, which the GUI's readiness endpoint and the
@@ -194,12 +211,46 @@ else
   fi
   mkdir -p "${VENDOR_DIR}"
   ZIP="${VENDOR_DIR}/${KSNP_ZIP_NAME}"
-  if [[ ! -s "${ZIP}" ]]; then
-    log "downloading kSNP4.1 ${KSNP_OS_LABEL} package (${KSNP_DL_SIZE}) from SourceForge"
-    run curl -L --fail --retry 3 -o "${ZIP}" "${KSNP_URL}" \
-      || die "kSNP4 download failed. Download the ${KSNP_OS_LABEL} package manually to ${ZIP} and re-run, or pass --ksnp-url."
+  PART="${ZIP}.part"
+  # A ~1 GB download gets interrupted: a dropped link, a Ctrl-C, or the caller's
+  # own stall watchdog killing the step. The old test was `[[ ! -s "${ZIP}" ]]`,
+  # which only asks "non-empty" — so a TRUNCATED file counted as "already
+  # downloaded", unzip then failed with "End-of-central-directory signature not
+  # found", and every subsequent `bdtools install ksnp_gui` failed the same way
+  # forever. That is a permanent wedge needing a hand-deleted file to escape.
+  #
+  # So: download to a .part file, resume it with -C -, and only promote it to the
+  # real name once `unzip -t` says the archive is complete. An interrupted attempt
+  # then costs nothing but the bytes already on disk, and a corrupt payload can
+  # never masquerade as a finished one.
+  if [[ -s "${ZIP}" ]] && zip_is_complete "${ZIP}"; then
+    ok "kSNP4 zip already downloaded and verified: ${ZIP}"
   else
-    ok "kSNP4 zip already downloaded: ${ZIP}"
+    if [[ -s "${ZIP}" ]]; then
+      warn "the existing ${KSNP_ZIP_NAME} is incomplete or corrupt — re-fetching it."
+      run mv -f "${ZIP}" "${PART}"
+    fi
+    if [[ -s "${PART}" ]]; then
+      log "resuming kSNP4.1 ${KSNP_OS_LABEL} package download (${KSNP_DL_SIZE}, $(_human_size "${PART}") already fetched)"
+    else
+      log "downloading kSNP4.1 ${KSNP_OS_LABEL} package (${KSNP_DL_SIZE}) from SourceForge"
+    fi
+    # -C - resumes; --retry survives transient drops; --speed-time/--speed-limit
+    # give curl its own stall detector so a dead mirror fails fast instead of
+    # waiting for the caller's watchdog.
+    run curl -L --fail --retry 3 --retry-delay 5 -C - \
+        --speed-time 60 --speed-limit 1024 \
+        -o "${PART}" "${KSNP_URL}" \
+      || die "kSNP4 download failed (partial file kept at ${PART}; re-run to resume).
+Or download the ${KSNP_OS_LABEL} package manually to ${ZIP} and re-run, or pass --ksnp-url."
+    if [[ ${DRY_RUN} -eq 0 ]]; then
+      zip_is_complete "${PART}" \
+        || die "the downloaded ${KSNP_ZIP_NAME} is not a complete zip archive.
+Kept at ${PART} so a re-run can resume it. If SourceForge served an error page
+instead of the file, delete it and re-run, or pass --ksnp-url."
+      run mv -f "${PART}" "${ZIP}"
+      ok "download verified: ${ZIP}"
+    fi
   fi
   log "unpacking kSNP4 ${KSNP_OS_LABEL} package"
   run unzip -q -o "${ZIP}" -d "${VENDOR_DIR}"
