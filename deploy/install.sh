@@ -36,53 +36,58 @@ VENDOR_DIR="${REPO_DIR}/vendor"
 # SourceForge ships a Linux package (ELF, ~545 MB) AND a Mac package (Mach-O,
 # ~1.0 GB). They are not interchangeable: unpacking the Linux zip on macOS gives
 # binaries that pass every `command -v` check and then die on first exec with
-# "OSError: [Errno 8] Exec format error". Rosetta 2 translates macOS x86_64, not
-# Linux ELF, so there is no way to run the Linux payload here — pick by OS.
-# The Mac package is x86_64 Mach-O, which Apple Silicon runs under Rosetta 2.
+# "OSError: [Errno 8] Exec format error" — Rosetta 2 translates macOS x86_64, not
+# Linux ELF. So pick by OS.
+#
+# Both packages are x86_64 ONLY, so the CPU matters too:
+#   macOS/arm64   -> the x86_64 Mac package, via Rosetta 2. Supported.
+#   Linux/aarch64 -> nothing to install. ARM Linux has no x86 translation layer,
+#                    so the Linux package would download 545 MB that can never
+#                    run. Refuse up front instead (WSL on Windows-on-ARM, AWS
+#                    Graviton, ARM servers all land here).
+_ksnp_uname_m="$(uname -m)"
 case "$(uname -s)" in
-  Linux)  KSNP_OS_LABEL="Linux"; KSNP_ZIP_NAME="kSNP4.1_Linux_package.zip"; KSNP_DL_SIZE="~545 MB";;
+  Linux)
+    case "${_ksnp_uname_m}" in
+      x86_64|amd64) KSNP_OS_LABEL="Linux"; KSNP_ZIP_NAME="kSNP4.1_Linux_package.zip"; KSNP_DL_SIZE="~545 MB";;
+      *)            KSNP_OS_LABEL=""; KSNP_ZIP_NAME=""; KSNP_DL_SIZE="";;
+    esac;;
   Darwin) KSNP_OS_LABEL="Mac";   KSNP_ZIP_NAME="kSNP4.1_Mac_package.zip";   KSNP_DL_SIZE="~1.0 GB";;
   *) KSNP_OS_LABEL=""; KSNP_ZIP_NAME=""; KSNP_DL_SIZE="";;
 esac
 # SourceForge direct-download (follows mirror redirects with curl -L).
 KSNP_URL="${KSNP_URL:-https://sourceforge.net/projects/ksnp/files/kSNP4.1%20${KSNP_OS_LABEL}%20package.zip/download}"
 
-# Does a compiled kSNP4 binary in DIR match this host's executable format?
-# Checked from the magic bytes rather than by exec'ing it: the compiled tools
-# take positional arguments and would block on stdin or write into cwd. `file` is
-# not used either — it is absent from minimal containers, and od(1) is in POSIX.
+# Can this host exec the compiled kSNP4 binaries in DIR?
+#
+# Delegated to bin/ksnp_platform.py, which the GUI's readiness endpoint and the
+# pipeline preflight also use — so an install, a doctor run and a job launch
+# cannot disagree about whether kSNP4 works here. (This was briefly reimplemented
+# in bash with od(1); two implementations of a subtle check is how they drift.)
+# It checks OS *and* CPU architecture: both published packages are x86_64 only, so
+# ARM Linux cannot run either, while Apple Silicon can via Rosetta 2.
+#
+# PYTHON is resolved in step 1 above, before this is ever called. Falls open (0)
+# if the helper can't run — a missing check must not block an otherwise fine
+# install; the toolchain verification in step 3 is the backstop.
 ksnp_payload_native() {
-  local dir="$1" probe magic
-  for probe in MakeKSNP4infile Kchooser4 jellyfish; do
-    [[ -f "${dir}/${probe}" ]] && break
-    probe=""
-  done
-  # Nothing compiled to inspect — let the caller's existence checks decide.
-  [[ -n "${probe}" ]] || return 0
-  magic="$(od -An -tx1 -N4 "${dir}/${probe}" 2>/dev/null | tr -d ' \n')"
-  case "$(uname -s)" in
-    # \x7fELF
-    Linux)  [[ "${magic}" == "7f454c46" ]];;
-    # Mach-O 64/32-bit little-endian, or a universal (fat) binary.
-    Darwin) [[ "${magic}" == "cffaedfe" || "${magic}" == "cefaedfe" || "${magic}" == "cafebabe" ]];;
-    *) return 0;;
-  esac
+  [[ -x "${PYTHON}" ]] || return 0
+  "${PYTHON}" "${REPO_DIR}/bin/ksnp_platform.py" check-dir "$1" 2>/dev/null
+}
+
+# Why the payload in DIR can't run here (empty if it can, or if unknown).
+ksnp_payload_problem() {
+  [[ -x "${PYTHON}" ]] || return 0
+  "${PYTHON}" "${REPO_DIR}/bin/ksnp_platform.py" check-dir "$1" 2>&1 >/dev/null || true
 }
 
 # Human-readable name for whatever a payload was built for, used in error text.
 ksnp_payload_os() {
-  local dir="$1" probe magic
-  for probe in MakeKSNP4infile Kchooser4 jellyfish; do
-    [[ -f "${dir}/${probe}" ]] && break
-    probe=""
-  done
-  [[ -n "${probe}" ]] || { echo "unknown"; return; }
-  magic="$(od -An -tx1 -N4 "${dir}/${probe}" 2>/dev/null | tr -d ' \n')"
-  case "${magic}" in
-    7f454c46)                   echo "Linux (ELF)";;
-    cffaedfe|cefaedfe|cafebabe) echo "macOS (Mach-O)";;
-    *)                          echo "unknown (magic ${magic:-none})";;
-  esac
+  if [[ -x "${PYTHON}" ]]; then
+    "${PYTHON}" "${REPO_DIR}/bin/ksnp_platform.py" describe "$1" 2>/dev/null || echo unknown
+  else
+    echo unknown
+  fi
 }
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -170,7 +175,11 @@ KSNP_LINK="${VENDOR_DIR}/kSNP4-bin"
 if [[ ${SKIP_KSNP} -eq 1 ]]; then
   warn "skipping kSNP4 download (--skip-ksnp)"
 elif [[ -z "${KSNP_ZIP_NAME}" ]]; then
-  warn "no kSNP4.1 package is published for $(uname -s) — kSNP analyses will not run here."
+  warn "no kSNP4.1 package can run on $(uname -s)/${_ksnp_uname_m} — kSNP analyses will not run here."
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    warn "  kSNP4 is published as x86_64 binaries only, and ARM Linux has no x86 translation layer."
+    warn "  Run kSNP analyses on an x86_64 Linux machine, a Mac, or an OOD deployment."
+  fi
 elif [[ -x "${KSNP_LINK}/kSNP4" ]] && ksnp_payload_native "${KSNP_LINK}"; then
   ok "kSNP4 already installed: ${KSNP_LINK}"
 else
@@ -258,11 +267,14 @@ done
 # here so a bad payload is a failed install, not a failed run.
 if [[ ${SKIP_KSNP} -eq 0 && -d "${KSNP_LINK}" ]]; then
   if ksnp_payload_native "${KSNP_LINK}"; then
-    ok "kSNP4 binaries match this host ($(uname -s)/$(uname -m))"
+    ok "kSNP4 binaries run on this host ($(uname -s)/${_ksnp_uname_m}, payload: $(ksnp_payload_os "${KSNP_LINK}"))"
   else
-    die "the kSNP4 payload in ${KSNP_LINK} was built for $(ksnp_payload_os "${KSNP_LINK}"), not $(uname -s).
-Every analysis would fail with 'Exec format error'. Remove the wrong-OS files under
-${VENDOR_DIR} and re-run deploy/install.sh to fetch the kSNP4.1 ${KSNP_OS_LABEL} package."
+    # Print the helper's own diagnosis — it distinguishes a wrong-OS payload from
+    # an Apple Silicon host with no Rosetta 2 from ARM Linux, and each has a
+    # different remedy. Reconstructing that here would only get it wrong.
+    die "the kSNP4 payload in ${KSNP_LINK} cannot run on this host.
+$(ksnp_payload_problem "${KSNP_LINK}")
+Payload: $(ksnp_payload_os "${KSNP_LINK}"). Wrong-OS files can be removed from ${VENDOR_DIR}."
   fi
 fi
 if command -v seqkit >/dev/null 2>&1; then ok "seqkit: $(seqkit version 2>&1 | head -1)"
