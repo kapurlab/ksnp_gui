@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import ThemeToggle from "./ThemeToggle";
 import CitationFooter from "./Citations";
@@ -699,6 +699,15 @@ export default function App() {
   const statusText = { idle: "idle", running: "running", succeeded: "succeeded", failed: "failed" }[jobStatus];
 
   const selKey = selectedRun ? runKey(selectedRun.project, selectedRun.label) : null;
+
+  // The shared Results table keys its rows by run_dir (an absolute path), but a run
+  // can also be selected from the Projects list, which only knows the label. Map
+  // label -> row key here so the table highlights the right row either way.
+  const selectedResultKey = useMemo(() => {
+    if (!selectedRun) return null;
+    const row = (results.rows || []).find((r) => r.sample === selectedRun.label);
+    return row ? (row.run_dir || row.sample) : selectedRun.label;
+  }, [selectedRun, results.rows]);
   const sum = selKey ? runSummaries[selKey] : null;
   const man = sum?.manifest || {};
   const qc = sum?.input_qc || {};
@@ -794,6 +803,49 @@ export default function App() {
                 />
                 <div className="form-hint">0.8 (the validated NVSL default). A SNP present in all genomes is a “core” SNP.</div>
               </div>
+
+              {/* Which kSNP4 is actually in use.
+                  Read-only, and deliberately prominent: this used to be answerable
+                  only by inspecting a shell PATH, and a wrong-OS payload looked
+                  identical to a correct one from the browser. The same three facts now
+                  go into every run log and run_manifest.json, so a result traces back
+                  to the binary that produced it. */}
+              <div className="form-section">
+                <label className="form-label">kSNP4 in use</label>
+                {!readiness?.toolchain?.kSNP4_path ? (
+                  <div className="note" style={{ fontSize: 12 }}>
+                    kSNP4 is not on PATH for this server.
+                    {readiness?.reason ? ` ${readiness.reason}` : " Run: bin/bdtools install ksnp_gui"}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, display: "grid", gap: 3 }}>
+                    <div>
+                      <strong>{readiness.toolchain.version || "kSNP4"}</strong>
+                      <span className="muted"> · built for {readiness.toolchain.payload_built_for}</span>
+                      <span className="muted"> · host {readiness.toolchain.host}</span>
+                    </div>
+                    {[
+                      ["kSNP4", readiness.toolchain.kSNP4_path],
+                      ["Kchooser4", readiness.toolchain.Kchooser4_path],
+                      ["MakeKSNP4infile", readiness.toolchain.MakeKSNP4infile_path],
+                    ].map(([name, path]) => (
+                      <div key={name} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                        <span className="muted" style={{ minWidth: 118 }}>{name}</span>
+                        {/* Full path, selectable, wrapping rather than forcing a
+                            horizontal scrollbar across the whole panel. */}
+                        <code style={{ fontSize: 11.5, overflowWrap: "anywhere" }}>{path || "(not found)"}</code>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="form-hint">
+                  kSNP4 is not a conda package — it is the SourceForge package unpacked
+                  under the tool’s <code>vendor/</code>. These paths, the version and the
+                  payload’s architecture are recorded in every run log and in
+                  <code> run_manifest.json</code>.
+                </div>
+              </div>
+
               <div className="form-section">
                 <label className="form-label">Personal projects root</label>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -1320,9 +1372,60 @@ export default function App() {
           </div>
         )}
 
-        {/* ════ Results ════ */}
+        {/* ════════════════════════════════════════════════════════ */}
+        {/* SECTION: Results — every completed run, not just the last  */}
+        {/* ════════════════════════════════════════════════════════ */}
         <div className="row-header">
           <h2>Results</h2>
+          <button className="ghost" onClick={() => setShowResultsPane(!showResultsPane)}>
+            {showResultsPane ? "Hide" : "Show"}
+          </button>
+        </div>
+        {showResultsPane && (
+          <div className="row-grid row-grid-split">
+            {/* LEFT — Current Run (live status for the batch in flight) */}
+<section className="panel">
+              <div className="panel-header">
+                <h2>Current Run</h2>
+                {jobId && <span className="muted" style={{ fontSize: 12 }}>job {jobId.slice(0, 8)}</span>}
+              </div>
+              {activeRun ? (
+                <div className="selection-box">
+                  <div className="sel-title">
+                    {jobStatus === "running" ? "Running" : jobStatus === "succeeded" ? "Done" : jobStatus}
+                  </div>
+                  <div><span className="sel-name">{activeRun.label}</span></div>
+                  <div style={{ marginTop: 2 }}><span className="muted">Project:</span> <strong>{activeRun.project}</strong></div>
+                  {activeRun.genome_count != null && (
+                    <div className="muted" style={{ marginTop: 2 }}>{activeRun.genome_count} genomes</div>
+                  )}
+                  {currentStep && <div className="muted" style={{ marginTop: 4 }}>{currentStep}</div>}
+                  <div className="note" style={{ marginTop: 8 }}>
+                    Trees, matrices, the PDF report and stats workbook appear in the Results section below when finished.
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-msg">No active run. Select genomes, set options, and Run kSNP4.</div>
+              )}
+            </section>
+            {/* RIGHT — every completed run, searchable (vSNP Step 1 model) */}
+            <ResultsPane
+              project={activeProject}
+              results={results}
+              columns={RESULT_COLUMNS}
+              labels={{ entity: "run", sampleHeader: "Run" }}
+              selectedKey={selectedResultKey}
+              // Clicking a row opens that run in the Selected run pane below —
+              // same destination as the Projects list's View button, so there is
+              // one place a run's summary and files appear however you got there.
+              onRowSelect={(row) => selectRun(activeProject, row.sample)}
+            />
+          </div>
+        )}
+
+        {/* ════ Selected run — detail for the row picked in the table above ════ */}
+        <div className="row-header">
+          <h2>Selected run</h2>
           <button className="ghost" onClick={() => setShowResults(!showResults)}>{showResults ? "Hide" : "Show"}</button>
         </div>
         {showResults && (
@@ -1503,52 +1606,6 @@ export default function App() {
                 </>
               )}
             </section>
-          </div>
-        )}
-
-        {/* ════════════════════════════════════════════════════════ */}
-        {/* SECTION: Results — every completed run, not just the last  */}
-        {/* ════════════════════════════════════════════════════════ */}
-        <div className="row-header">
-          <h2>Results</h2>
-          <button className="ghost" onClick={() => setShowResultsPane(!showResultsPane)}>
-            {showResultsPane ? "Hide" : "Show"}
-          </button>
-        </div>
-        {showResultsPane && (
-          <div className="row-grid row-grid-split">
-            {/* LEFT — Current Run (live status for the batch in flight) */}
-<section className="panel">
-              <div className="panel-header">
-                <h2>Current Run</h2>
-                {jobId && <span className="muted" style={{ fontSize: 12 }}>job {jobId.slice(0, 8)}</span>}
-              </div>
-              {activeRun ? (
-                <div className="selection-box">
-                  <div className="sel-title">
-                    {jobStatus === "running" ? "Running" : jobStatus === "succeeded" ? "Done" : jobStatus}
-                  </div>
-                  <div><span className="sel-name">{activeRun.label}</span></div>
-                  <div style={{ marginTop: 2 }}><span className="muted">Project:</span> <strong>{activeRun.project}</strong></div>
-                  {activeRun.genome_count != null && (
-                    <div className="muted" style={{ marginTop: 2 }}>{activeRun.genome_count} genomes</div>
-                  )}
-                  {currentStep && <div className="muted" style={{ marginTop: 4 }}>{currentStep}</div>}
-                  <div className="note" style={{ marginTop: 8 }}>
-                    Trees, matrices, the PDF report and stats workbook appear in the Results section below when finished.
-                  </div>
-                </div>
-              ) : (
-                <div className="empty-msg">No active run. Select genomes, set options, and Run kSNP4.</div>
-              )}
-            </section>
-            {/* RIGHT — every completed run, searchable (vSNP Step 1 model) */}
-            <ResultsPane
-              project={activeProject}
-              results={results}
-              columns={RESULT_COLUMNS}
-              labels={{ entity: "run", sampleHeader: "Run" }}
-            />
           </div>
         )}
 

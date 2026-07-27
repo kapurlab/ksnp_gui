@@ -104,9 +104,30 @@ def _ksnp_readiness() -> Dict[str, Any]:
     # to name the real cause — "not installed" sends people looking in conda.
     mismatch = ksnp_platform.payload_platform_error()
     if mismatch:
-        return {"ready": False, "missing": [], "reason": mismatch}
+        return {"ready": False, "missing": [], "reason": mismatch,
+                "toolchain": _ksnp_toolchain()}
 
-    return {"ready": True, "missing": [], "reason": ""}
+    return {"ready": True, "missing": [], "reason": "",
+            "toolchain": _ksnp_toolchain()}
+
+
+def _ksnp_toolchain() -> Dict[str, Any]:
+    """Which kSNP4 is actually in use, for the Settings panel.
+
+    Surfaced in the GUI because "which kSNP4 am I running?" was answerable only by
+    reading a shell PATH — and a wrong-OS payload looked identical to a correct one
+    from the browser. Reported alongside the run log and run_manifest.json, which
+    now record the same three facts, so a result can be traced to its binary.
+    """
+    exe = shutil.which("kSNP4")
+    return {
+        "kSNP4_path": exe,
+        "Kchooser4_path": shutil.which("Kchooser4"),
+        "MakeKSNP4infile_path": shutil.which("MakeKSNP4infile"),
+        "version": ksnp_platform.version_from_path(exe),
+        "payload_built_for": ksnp_platform.describe_payload(),
+        "host": f"{platform.system()} {platform.machine()}",
+    }
 
 # ---------------------------------------------------------------------------
 # App & job manager

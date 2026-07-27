@@ -182,6 +182,33 @@ def _probe_path() -> Optional[str]:
     return None
 
 
+def version_from_path(exe: Optional[str]) -> Optional[str]:
+    """kSNP's version, derived from its install path (e.g. ".../kSNP4.1pkg/kSNP4"
+    -> "kSNP4.1").
+
+    kSNP4 and Kchooser4 have no --version flag; run with no arguments they print a
+    usage error. The path is the only place the version appears. Lives here rather
+    than in ksnp_pipeline.py so the GUI's Settings panel and the run manifest cannot
+    report different versions for the same binary.
+    """
+    if not exe:
+        return None
+    import os
+    import re
+    m = re.search(r"kSNP(\d+(?:\.\d+)?)", os.path.realpath(exe))
+    return f"kSNP{m.group(1)}" if m else "kSNP4"
+
+
+def describe_payload() -> str:
+    """What the kSNP4 payload on PATH was built for, e.g. "macOS (Mach-O) x86_64".
+
+    Probes a COMPILED member: `kSNP4` itself is a bash script, so describing it
+    would always say "an unrecognised format".
+    """
+    probe = _probe_path()
+    return describe(probe) if probe else "not found"
+
+
 def payload_platform_error() -> Optional[str]:
     """None when the kSNP4 binaries on PATH can run here; else why not.
 

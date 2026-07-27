@@ -183,14 +183,12 @@ def _tool_version(cmd: List[str]) -> Optional[str]:
 
 
 def _ksnp_version() -> Optional[str]:
-    """kSNP4 / Kchooser4 have no clean --version flag (running them with no args
-    prints a usage error). Derive the version from the resolved install path,
-    e.g. .../kSNP4.1pkg/kSNP4 -> 'kSNP4.1'."""
-    exe = shutil.which("kSNP4")
-    if not exe:
-        return None
-    m = re.search(r"kSNP(\d+(?:\.\d+)?)", str(Path(exe).resolve()))
-    return f"kSNP{m.group(1)}" if m else "kSNP4"
+    """kSNP's version, derived from its install path (it has no --version flag).
+
+    Delegates to ksnp_platform so the manifest, the run log and the GUI's Settings
+    panel cannot disagree about the version of the same binary.
+    """
+    return ksnp_platform.version_from_path(shutil.which("kSNP4"))
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +670,18 @@ def main(argv=None) -> int:
     log(f"  outdir:   {outdir}")
     log(f"  inputs:   {len(args.inputs)} file(s)")
     log(f"  options:  min_frac={args.min_frac} core={core} ML={ml} vcf={vcf} threads={args.threads}")
+    # WHICH kSNP4 ran this. The log already carried the full command line and every
+    # kSNP subcommand, but the binary's identity lived only in run_manifest.json's
+    # `versions` — and its *path* was recorded nowhere, even though the version is
+    # derived from it. After a week where the same command produced Linux binaries
+    # on a Mac, "which kSNP4 was this?" is the first question a log has to answer.
+    for _t in ("kSNP4", "Kchooser4", "MakeKSNP4infile"):
+        _p = shutil.which(_t)
+        log(f"  {_t + ':':<17} {_p or '(not on PATH)'}")
+    log(f"  {'version:':<17} {_ksnp_version() or 'unknown'}"
+        f"  (payload: {ksnp_platform.describe_payload()})")
+    log(f"  {'host:':<17} {platform.system()} {platform.machine()} / python {platform.python_version()}")
+    log(f"  {'seqkit:':<17} {_tool_version(['seqkit', 'version']) or '(not found)'}")
     log("=" * 70)
 
     # ---- Step 1: stage + sanitise (FASTA required) ----
@@ -766,6 +776,19 @@ def main(argv=None) -> int:
             "kSNP4": _ksnp_version(),
             "Kchooser4": _ksnp_version(),   # bundled in the same kSNP package
             "seqkit": _tool_version(["seqkit", "version"]),
+        },
+        # WHICH binary produced this, not just which version. The version above is
+        # derived from this path, and until now the path itself was discarded — so a
+        # manifest could not distinguish two installs claiming the same version, and
+        # could not show that a wrong-OS payload had been used. Both are answerable
+        # from a saved manifest now, without the machine still being to hand.
+        "toolchain": {
+            "kSNP4_path": shutil.which("kSNP4"),
+            "Kchooser4_path": shutil.which("Kchooser4"),
+            "MakeKSNP4infile_path": shutil.which("MakeKSNP4infile"),
+            "payload_built_for": ksnp_platform.describe_payload(),
+            "host": f"{platform.system()} {platform.machine()}",
+            "python": platform.python_version(),
         },
         "thresholds_note": (
             "min_frac is the minimum fraction of genomes in which a SNP locus must "
