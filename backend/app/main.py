@@ -65,28 +65,48 @@ _FASTA_EXTS = (".fasta", ".fa", ".fna", ".fas", ".ffn", ".fsa")
 # ---------------------------------------------------------------------------
 # Is kSNP4 actually runnable here?
 #
-# kSNP4 is not a conda package — it's the kSNP4.1 Linux package that
+# kSNP4 is not a conda package — it's the kSNP4.1 package for this OS that
 # deploy/install.sh unpacks into vendor/kSNP4-bin, which the launcher prepends to
 # PATH. vendor/ is gitignored, so a fresh clone or a feature worktree has none,
 # and the GUI would happily queue a job that could only ever exit 127.
+#
+# Two distinct failures, and only one of them is about presence:
+#   * nothing on PATH            -> not installed (a fresh clone, empty vendor/)
+#   * on PATH, wrong executable  -> the OTHER OS's package was downloaded
+# The second one is why this check can't just be shutil.which: the Linux payload
+# on a Mac satisfies which() and then dies with "Exec format error" 0.4 s into
+# the run. See bin/ksnp_platform.py.
 # ---------------------------------------------------------------------------
-_REQUIRED_TOOLS = ("kSNP4", "Kchooser4", "MakeKSNP4infile")
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+import ksnp_platform  # noqa: E402  (needs _BIN_DIR on sys.path first)
+
+_REQUIRED_TOOLS = ksnp_platform.REQUIRED_TOOLS
 
 
 def _ksnp_readiness() -> Dict[str, Any]:
-    missing = [t for t in _REQUIRED_TOOLS if shutil.which(t) is None]
-    if not missing:
-        return {"ready": True, "missing": [], "reason": ""}
-    if platform.system() != "Linux":
-        reason = (f"kSNP4 ships Linux-only binaries, so it cannot run on "
-                  f"{platform.system()}. Use the lab server or an OOD deployment "
-                  f"for kSNP analyses.")
-    else:
-        reason = ("kSNP4 is not installed here (missing: " + ", ".join(missing) + "). "
-                  "It is downloaded separately from conda into vendor/kSNP4-bin. "
-                  "Fix with:  bin/bdtools install ksnp_gui    "
-                  "Check with: bin/bdtools doctor ksnp_gui")
-    return {"ready": False, "missing": missing, "reason": reason}
+    missing = ksnp_platform.missing_tools()
+    if missing:
+        pkg = ksnp_platform.package_label()
+        if pkg is None:
+            reason = (f"kSNP4 is not published for {platform.system()}, so it cannot "
+                      f"run on this computer. Use the lab server or an OOD "
+                      f"deployment for kSNP analyses.")
+        else:
+            reason = ("kSNP4 is not installed here (missing: " + ", ".join(missing) + "). "
+                      f"It is downloaded separately from conda — the {pkg} — into "
+                      "vendor/kSNP4-bin. "
+                      "Fix with:  bin/bdtools install ksnp_gui    "
+                      "Check with: bin/bdtools doctor ksnp_gui")
+        return {"ready": False, "missing": missing, "reason": reason}
+
+    # Present but built for another OS: Run must stay disabled, and the reason has
+    # to name the real cause — "not installed" sends people looking in conda.
+    mismatch = ksnp_platform.payload_platform_error()
+    if mismatch:
+        return {"ready": False, "missing": [], "reason": mismatch}
+
+    return {"ready": True, "missing": [], "reason": ""}
 
 # ---------------------------------------------------------------------------
 # App & job manager

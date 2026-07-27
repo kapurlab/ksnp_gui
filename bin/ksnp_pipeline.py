@@ -85,6 +85,7 @@ except Exception:
 import argparse
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -92,6 +93,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+# Sibling module — shared with backend/app/main.py so the GUI's readiness gate and
+# this preflight can never disagree about whether kSNP4 can run here.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ksnp_platform  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parent
@@ -126,7 +132,7 @@ def _have(tool: str) -> bool:
 # kSNP4 is not a conda package: it's the vendored SourceForge package that
 # deploy/install.sh unpacks into vendor/kSNP4-bin and the launcher prepends to
 # PATH. When that dir is missing, every one of these disappears at once.
-REQUIRED_TOOLS = ("kSNP4", "Kchooser4", "MakeKSNP4infile")
+REQUIRED_TOOLS = ksnp_platform.REQUIRED_TOOLS
 
 
 def preflight() -> List[str]:
@@ -616,19 +622,40 @@ def main(argv=None) -> int:
         log("=" * 70)
         log(f"ERROR: kSNP4 is not installed here — missing: {', '.join(missing)}")
         log("")
-        log("  kSNP4 is not a conda package. It is the kSNP4.1 Linux package,")
+        pkg = ksnp_platform.package_label()
+        log(f"  kSNP4 is not a conda package. It is the {pkg or 'kSNP4.1'} package,")
         log("  downloaded from SourceForge into ksnp_gui/vendor/kSNP4-bin and added")
         log("  to PATH at launch. An empty vendor/ (a fresh clone, or a feature")
         log("  worktree — vendor/ is gitignored) produces exactly this.")
         log("")
         log("  Fix:  bin/bdtools install ksnp_gui     # downloads the package")
         log("  Check: bin/bdtools doctor ksnp_gui")
-        log("  Note: kSNP4 ships Linux-only binaries — it cannot run on macOS.")
+        if pkg is None:
+            log(f"  Note: no kSNP4.1 package is published for {platform.system()}.")
         log("")
         log(f"  PATH was: {os.environ.get('PATH', '')}")
         missing_assets = os.environ.get("BDTOOLS_MISSING_ASSETS", "")
         if missing_assets:
             log(f"  The launcher already flagged this: missing {missing_assets}")
+        log("=" * 70)
+        return 3
+
+    # ---- Step 0b: are those binaries the right kind of executable? ----
+    # Present-on-PATH is not runnable. A host that downloaded the Linux package
+    # but runs macOS gets past the check above and then dies inside step 3 with
+    # "OSError: [Errno 8] Exec format error" — after the run dir exists and the
+    # GUI has reported the job as started. Fail here instead, with the real cause.
+    mismatch = ksnp_platform.payload_platform_error()
+    if mismatch:
+        log("=" * 70)
+        log("ERROR: the installed kSNP4 binaries cannot run on this computer.")
+        log("")
+        for line in mismatch.split(". "):
+            if line.strip():
+                log(f"  {line.strip().rstrip('.')}.")
+        log("")
+        log(f"  host:    {platform.system()} {platform.machine()}")
+        log(f"  kSNP4:   {shutil.which('kSNP4')}")
         log("=" * 70)
         return 3
 

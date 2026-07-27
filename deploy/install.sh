@@ -9,8 +9,9 @@
 # What it does:
 #   1. Locate/create the conda env (shared at <repo>/env, else personal `ksnp`).
 #   2. pip install backend/requirements.txt into that env.
-#   3. Download + unpack the kSNP4.1 Linux package into vendor/ and expose its
-#      executables via the stable symlink vendor/kSNP4-bin (skip if present).
+#   3. Download + unpack the kSNP4.1 package FOR THIS OS (Linux or Mac) into
+#      vendor/ and expose its executables via the stable symlink
+#      vendor/kSNP4-bin (skip if a payload that runs on this host is present).
 #   4. Verify kSNP4 / Kchooser4 / MakeKSNP4infile + seqkit resolve on PATH.
 #   5. Build the React frontend (frontend/dist/).
 #
@@ -29,9 +30,60 @@ USE_PERSONAL=0
 SKIP_KSNP=0
 SKIP_FRONTEND=0
 DRY_RUN=0
-# SourceForge direct-download (follows mirror redirects with curl -L).
-KSNP_URL="${KSNP_URL:-https://sourceforge.net/projects/ksnp/files/kSNP4.1%20Linux%20package.zip/download}"
 VENDOR_DIR="${REPO_DIR}/vendor"
+
+# ---- which kSNP4.1 package does this host need? ----
+# SourceForge ships a Linux package (ELF, ~545 MB) AND a Mac package (Mach-O,
+# ~1.0 GB). They are not interchangeable: unpacking the Linux zip on macOS gives
+# binaries that pass every `command -v` check and then die on first exec with
+# "OSError: [Errno 8] Exec format error". Rosetta 2 translates macOS x86_64, not
+# Linux ELF, so there is no way to run the Linux payload here — pick by OS.
+# The Mac package is x86_64 Mach-O, which Apple Silicon runs under Rosetta 2.
+case "$(uname -s)" in
+  Linux)  KSNP_OS_LABEL="Linux"; KSNP_ZIP_NAME="kSNP4.1_Linux_package.zip"; KSNP_DL_SIZE="~545 MB";;
+  Darwin) KSNP_OS_LABEL="Mac";   KSNP_ZIP_NAME="kSNP4.1_Mac_package.zip";   KSNP_DL_SIZE="~1.0 GB";;
+  *) KSNP_OS_LABEL=""; KSNP_ZIP_NAME=""; KSNP_DL_SIZE="";;
+esac
+# SourceForge direct-download (follows mirror redirects with curl -L).
+KSNP_URL="${KSNP_URL:-https://sourceforge.net/projects/ksnp/files/kSNP4.1%20${KSNP_OS_LABEL}%20package.zip/download}"
+
+# Does a compiled kSNP4 binary in DIR match this host's executable format?
+# Checked from the magic bytes rather than by exec'ing it: the compiled tools
+# take positional arguments and would block on stdin or write into cwd. `file` is
+# not used either — it is absent from minimal containers, and od(1) is in POSIX.
+ksnp_payload_native() {
+  local dir="$1" probe magic
+  for probe in MakeKSNP4infile Kchooser4 jellyfish; do
+    [[ -f "${dir}/${probe}" ]] && break
+    probe=""
+  done
+  # Nothing compiled to inspect — let the caller's existence checks decide.
+  [[ -n "${probe}" ]] || return 0
+  magic="$(od -An -tx1 -N4 "${dir}/${probe}" 2>/dev/null | tr -d ' \n')"
+  case "$(uname -s)" in
+    # \x7fELF
+    Linux)  [[ "${magic}" == "7f454c46" ]];;
+    # Mach-O 64/32-bit little-endian, or a universal (fat) binary.
+    Darwin) [[ "${magic}" == "cffaedfe" || "${magic}" == "cefaedfe" || "${magic}" == "cafebabe" ]];;
+    *) return 0;;
+  esac
+}
+
+# Human-readable name for whatever a payload was built for, used in error text.
+ksnp_payload_os() {
+  local dir="$1" probe magic
+  for probe in MakeKSNP4infile Kchooser4 jellyfish; do
+    [[ -f "${dir}/${probe}" ]] && break
+    probe=""
+  done
+  [[ -n "${probe}" ]] || { echo "unknown"; return; }
+  magic="$(od -An -tx1 -N4 "${dir}/${probe}" 2>/dev/null | tr -d ' \n')"
+  case "${magic}" in
+    7f454c46)                   echo "Linux (ELF)";;
+    cffaedfe|cefaedfe|cafebabe) echo "macOS (Mach-O)";;
+    *)                          echo "unknown (magic ${magic:-none})";;
+  esac
+}
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  ok\033[0m %s\n' "$*"; }
@@ -112,32 +164,53 @@ log "pip install backend requirements into ${ENV_DESC}"
 run "${PYTHON}" -m pip install -r "${REPO_DIR}/backend/requirements.txt"
 
 # ---------------------------------------------------------------------------
-# 2. kSNP4 (SourceForge Linux package)
+# 2. kSNP4 (the SourceForge package for this OS)
 # ---------------------------------------------------------------------------
 KSNP_LINK="${VENDOR_DIR}/kSNP4-bin"
 if [[ ${SKIP_KSNP} -eq 1 ]]; then
   warn "skipping kSNP4 download (--skip-ksnp)"
-elif [[ -x "${KSNP_LINK}/kSNP4" ]]; then
+elif [[ -z "${KSNP_ZIP_NAME}" ]]; then
+  warn "no kSNP4.1 package is published for $(uname -s) — kSNP analyses will not run here."
+elif [[ -x "${KSNP_LINK}/kSNP4" ]] && ksnp_payload_native "${KSNP_LINK}"; then
   ok "kSNP4 already installed: ${KSNP_LINK}"
 else
+  # An existing payload built for the WRONG OS is the failure this branch exists
+  # to repair: it satisfies -x and `command -v`, so the old check called it
+  # installed and every run then died with "Exec format error". Move it aside
+  # (don't delete a 545 MB–1 GB download the user may want) and fetch the right one.
+  if [[ -x "${KSNP_LINK}/kSNP4" ]]; then
+    warn "the installed kSNP4 payload was built for $(ksnp_payload_os "${KSNP_LINK}"), but this host is $(uname -s) — replacing it."
+    warn "  the wrong-OS files stay on disk under ${VENDOR_DIR}; delete them yourself to reclaim the space."
+    run rm -f "${KSNP_LINK}"
+  fi
   mkdir -p "${VENDOR_DIR}"
-  ZIP="${VENDOR_DIR}/kSNP4.1_Linux_package.zip"
+  ZIP="${VENDOR_DIR}/${KSNP_ZIP_NAME}"
   if [[ ! -s "${ZIP}" ]]; then
-    log "downloading kSNP4.1 Linux package (~545 MB) from SourceForge"
+    log "downloading kSNP4.1 ${KSNP_OS_LABEL} package (${KSNP_DL_SIZE}) from SourceForge"
     run curl -L --fail --retry 3 -o "${ZIP}" "${KSNP_URL}" \
-      || die "kSNP4 download failed. Download the Linux package manually to ${ZIP} and re-run, or pass --ksnp-url."
+      || die "kSNP4 download failed. Download the ${KSNP_OS_LABEL} package manually to ${ZIP} and re-run, or pass --ksnp-url."
   else
     ok "kSNP4 zip already downloaded: ${ZIP}"
   fi
-  log "unpacking kSNP4 package"
+  log "unpacking kSNP4 ${KSNP_OS_LABEL} package"
   run unzip -q -o "${ZIP}" -d "${VENDOR_DIR}"
   # Find the directory that actually contains the kSNP4 executable and point the
   # stable symlink at it (the archive's top-level folder name carries a space
   # and a version, so don't hard-code it).
   if [[ ${DRY_RUN} -eq 0 ]]; then
-    KSNP_EXE="$(find "${VENDOR_DIR}" -type f -name kSNP4 ! -path "${KSNP_LINK}/*" 2>/dev/null | head -1)"
-    [[ -n "${KSNP_EXE}" ]] || die "kSNP4 executable not found after unzip. Inspect ${VENDOR_DIR}."
-    KSNP_PKG_DIR="$(dirname "${KSNP_EXE}")"
+    # A host that has been repaired from the wrong package has BOTH archives
+    # unpacked side by side, so "the first kSNP4 that find turns up" is a coin
+    # flip that can re-link the payload we just replaced. Take the first
+    # candidate whose compiled binaries actually match this host, and skip the
+    # macOS resource-fork dir the Mac zip unpacks alongside the package.
+    KSNP_PKG_DIR=""
+    while IFS= read -r _cand; do
+      [[ -n "${_cand}" ]] || continue
+      _dir="$(dirname "${_cand}")"
+      if ksnp_payload_native "${_dir}"; then KSNP_PKG_DIR="${_dir}"; break; fi
+    done < <(find "${VENDOR_DIR}" -type f -name kSNP4 \
+               ! -path "${KSNP_LINK}/*" ! -path '*/__MACOSX/*' 2>/dev/null)
+    [[ -n "${KSNP_PKG_DIR}" ]] || die "no kSNP4 payload for $(uname -s) found after unzip. Inspect ${VENDOR_DIR}."
     # The archive unpacks with group/other stripped: the package dir arrives
     # drwxr-Sr-- (not traversable) and Kchooser4/MakeKSNP4infile arrive -rwxr--r--.
     # On a shared server that means only the installing account can run kSNP4 —
@@ -179,6 +252,19 @@ for t in kSNP4 Kchooser4 MakeKSNP4infile; do
   if command -v "$t" >/dev/null 2>&1; then ok "$t -> $(command -v "$t")"
   else warn "$t NOT on PATH (kSNP install incomplete?)"; fi
 done
+# Resolving on PATH is NOT the same as being runnable. A wrong-OS payload
+# resolves fine and then fails at the first exec, which is how "Exec format
+# error" reached users mid-analysis instead of at install time. Assert the format
+# here so a bad payload is a failed install, not a failed run.
+if [[ ${SKIP_KSNP} -eq 0 && -d "${KSNP_LINK}" ]]; then
+  if ksnp_payload_native "${KSNP_LINK}"; then
+    ok "kSNP4 binaries match this host ($(uname -s)/$(uname -m))"
+  else
+    die "the kSNP4 payload in ${KSNP_LINK} was built for $(ksnp_payload_os "${KSNP_LINK}"), not $(uname -s).
+Every analysis would fail with 'Exec format error'. Remove the wrong-OS files under
+${VENDOR_DIR} and re-run deploy/install.sh to fetch the kSNP4.1 ${KSNP_OS_LABEL} package."
+  fi
+fi
 if command -v seqkit >/dev/null 2>&1; then ok "seqkit: $(seqkit version 2>&1 | head -1)"
 else warn "seqkit not on PATH — input QC will be skipped at runtime."; fi
 if command -v datasets >/dev/null 2>&1; then ok "datasets: $(datasets --version 2>&1 | head -1)"
