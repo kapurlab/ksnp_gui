@@ -63,5 +63,5 @@ python bin/ksnp_pipeline.py --label demo --outdir /path/to/out \
 
 Everything site-specific is in `backend/app/config.py` (project roots) and
 `deploy/install.sh` (`--conda-base`, kSNP4 URL). `install.sh` is idempotent and
-no-sudo; only `register_ood_apps.sh` needs root. See `CLAUDE.md` and
-`/srv/kapurlab/tools/amr_plus_gui/docs/BUILDING_A_SIBLING_TOOL.md`.
+no-sudo; only `register_ood_apps.sh` needs root. See
+`amr_plus_gui/docs/BUILDING_A_SIBLING_TOOL.md` for the suite-wide conventions.
