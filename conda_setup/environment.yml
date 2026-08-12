@@ -13,7 +13,6 @@ name: ksnp
 channels:
   - conda-forge
   - bioconda
-  - defaults
 
 dependencies:
   # Core Python
