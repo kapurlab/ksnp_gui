@@ -25,6 +25,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -822,9 +823,32 @@ def api_run_summary(name: str, label: str):
 # ---------------------------------------------------------------------------
 # Config / browse
 # ---------------------------------------------------------------------------
+def _resolve_app_version() -> str:
+    """Version of the deployed checkout — the exact string the Diagnostic
+    Tools Dashboard shows for this tool (`git describe --tags --always`,
+    the same command bdtools runs). Resolved once at startup; empty when
+    git or the .git dir is unavailable, in which case the frontend falls
+    back to its built-in constant."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(_REPO_ROOT), "describe", "--tags", "--always"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+APP_VERSION = _resolve_app_version()
+
+
 @app.get("/api/config")
 def api_get_config():
-    return JSONResponse(load_config())
+    cfg = load_config()
+    # Deployed checkout's version (git describe) — what the dashboard shows.
+    # Injected into the response only; never written back to the config file.
+    cfg["app_version"] = APP_VERSION
+    return JSONResponse(cfg)
 
 
 class ConfigPayload(BaseModel):

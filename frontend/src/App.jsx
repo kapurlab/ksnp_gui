@@ -8,7 +8,10 @@ import { useResults } from "./useResults";
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const APP_VERSION = "0.1.0";
+// Fallback ONLY: the header shows the backend-reported version (git
+// describe — the same string the Diagnostic Tools Dashboard shows) and
+// uses this constant just until that arrives / on installs without git.
+const APP_VERSION = "0.5.1";
 
 function fileIcon(name) {
   if (name.endsWith(".json")) return "📁";
@@ -149,6 +152,9 @@ export default function App() {
   const [activeRun, setActiveRun] = useState(null);  // {project, label, genome_count}
 
   const [settingsDraft, setSettingsDraft] = useState({});
+  // Version of the deployed checkout as reported by the backend (git
+  // describe — the same string the Diagnostic Tools Dashboard shows).
+  const [serverVersion, setServerVersion] = useState("");
   const [folderBrowser, setFolderBrowser] = useState({ open: false, path: "", parent: null, entries: [], loading: false, error: "" });
 
   const [showSettings, setShowSettings] = useState(false);
@@ -173,6 +179,7 @@ export default function App() {
       .then((r) => r.json())
       .then((cfg) => {
         setSettingsDraft(cfg);
+        setServerVersion(cfg.app_version || "");
         if (cfg.min_frac != null) setMinFrac(cfg.min_frac);
         if (cfg.run_core != null) setRunCore(!!cfg.run_core);
         if (cfg.run_ml != null) setRunMl(!!cfg.run_ml);
@@ -742,7 +749,7 @@ export default function App() {
           <img className="app-logo" src="./ksnp_icon.svg" alt="kSNP phylogenetic tree icon" />
           <div>
             <h1>
-              kSNP4 <span className="version-tag">v{APP_VERSION}</span>
+              kSNP4 <span className="version-tag">{serverVersion || `v${APP_VERSION}`}</span>
             </h1>
             <p>Reference-free, alignment-free SNP discovery &amp; phylogenetics from genome FASTAs</p>
           </div>
