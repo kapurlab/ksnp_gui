@@ -508,6 +508,40 @@ export default function App() {
     }
   }
 
+  // Anchor for shift-click range selection: the last genome toggled by hand.
+  const lastToggledRef = useRef(null);
+
+  /* Clicking anywhere on a genome card toggles whether it is included in the
+     run — the checkbox alone is a fingernail-sized target. Note the inverted
+     model here: this list tracks EXCLUSIONS, so "checked" means included.
+     Shift-click extends the range from the last card toggled, setting the
+     whole span to match what this click produced. */
+  function onGenomeRowClick(project, g, event) {
+    if (event.target.closest("input, button, a, select, textarea, label, summary")) return;
+    const key = genKey(project, g);
+    if (event.shiftKey && lastToggledRef.current) {
+      const list = genomes[project] || [];
+      const from = list.findIndex((x) => genKey(project, x) === lastToggledRef.current);
+      const to = list.findIndex((x) => genKey(project, x) === key);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        const include = Boolean(excluded[key]);  // this click's outcome
+        setExcluded((m) => {
+          const next = { ...m };
+          for (let i = lo; i <= hi; i++) {
+            const k = genKey(project, list[i]);
+            if (include) delete next[k];
+            else next[k] = true;
+          }
+          return next;
+        });
+        return;
+      }
+    }
+    lastToggledRef.current = key;
+    toggleExclude(project, g);
+  }
+
   function toggleExclude(project, g) {
     const key = genKey(project, g);
     setExcluded((m) => {
@@ -977,7 +1011,22 @@ export default function App() {
                           const key = genKey(proj.name, g);
                           const included = !excluded[key];
                           return (
-                            <div key={g.path} className="sample-item">
+                            <div
+                              key={g.path}
+                              className={`sample-item selectable ${included ? "checked" : ""}`}
+                              onClick={(e) => onGenomeRowClick(proj.name, g, e)}
+                              onKeyDown={(e) => {
+                                if (e.key === " " || e.key === "Enter") {
+                                  if (e.target.closest("input, button, a, select, textarea, label, summary")) return;
+                                  e.preventDefault();
+                                  onGenomeRowClick(proj.name, g, e);
+                                }
+                              }}
+                              role="checkbox"
+                              aria-checked={included}
+                              tabIndex={0}
+                              title="Click anywhere on this genome to include or exclude it (shift-click for a range)"
+                            >
                               <div className="sample-name-row" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 <input type="checkbox" checked={included} onChange={() => toggleExclude(proj.name, g)} title="Include in kSNP run" />
                                 <div className="sample-name" title={g.name} style={{ flex: 1 }}>{g.sample}</div>
