@@ -3,8 +3,10 @@ import "./App.css";
 import ThemeToggle from "./ThemeToggle";
 import CitationFooter from "./Citations";
 import ResultsPane from "./ResultsPane";
+import { ResizableTable, Grip } from "./ResizableTable";
 import { useResults } from "./useResults";
 import CopyLogButton from "./CopyLogButton";
+import { PaneSplitters } from "./SplitPane";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -775,6 +777,9 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Draggable dividers for every two-pane row on the page (see
+          SplitPane.jsx). One element, no per-row wiring. */}
+      <PaneSplitters />
       <input
         ref={uploadInputRef}
         type="file"
@@ -1577,12 +1582,12 @@ export default function App() {
                     <details style={{ marginBottom: 12 }}>
                       <summary style={{ cursor: "pointer", fontWeight: 600 }}>Guide to the output files — what's what (kSNP writes a lot of files)</summary>
                       <div style={{ overflowX: "auto", marginTop: 8 }}>
-                        <table className="result-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <ResizableTable id="ksnp.file-guide" className="result-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                           <thead>
                             <tr style={{ textAlign: "left", borderBottom: "2px solid var(--border, #ddd)" }}>
-                              <th style={{ padding: "6px 8px" }}>File group</th>
-                              <th style={{ padding: "6px 8px", textAlign: "right" }}>#</th>
-                              <th style={{ padding: "6px 8px" }}>What it is · when to use it</th>
+                              <th style={{ padding: "6px 8px" }}><span className="rt-th-label">File group</span><Grip label="File group" /></th>
+                              <th style={{ padding: "6px 8px", textAlign: "right" }}><span className="rt-th-label">#</span><Grip label="#" /></th>
+                              <th style={{ padding: "6px 8px" }}><span className="rt-th-label">What it is · when to use it</span><Grip label="What it is · when to use it" /></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1594,7 +1599,7 @@ export default function App() {
                               </tr>
                             ))}
                           </tbody>
-                        </table>
+                        </ResizableTable>
                       </div>
                     </details>
                   )}
@@ -1629,15 +1634,15 @@ export default function App() {
                     <details open style={{ marginBottom: 12 }}>
                       <summary style={{ cursor: "pointer", fontWeight: 600 }}>Input genome quality ({qc.genomes.length})</summary>
                       <div style={{ overflowX: "auto", marginTop: 8 }}>
-                        <table className="result-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <ResizableTable id="ksnp.genome-qc" className="result-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                           <thead>
                             <tr style={{ textAlign: "left", borderBottom: "2px solid var(--border, #ddd)" }}>
-                              <th style={{ padding: "6px 8px" }}>Genome</th>
-                              <th style={{ padding: "6px 8px", textAlign: "right" }}>Contigs</th>
-                              <th style={{ padding: "6px 8px", textAlign: "right" }}>Length</th>
-                              <th style={{ padding: "6px 8px", textAlign: "right" }}>N50</th>
-                              <th style={{ padding: "6px 8px", textAlign: "right" }}>GC%</th>
-                              <th style={{ padding: "6px 8px" }}>QC</th>
+                              <th style={{ padding: "6px 8px" }}><span className="rt-th-label">Genome</span><Grip label="Genome" /></th>
+                              <th style={{ padding: "6px 8px", textAlign: "right" }}><span className="rt-th-label">Contigs</span><Grip label="Contigs" /></th>
+                              <th style={{ padding: "6px 8px", textAlign: "right" }}><span className="rt-th-label">Length</span><Grip label="Length" /></th>
+                              <th style={{ padding: "6px 8px", textAlign: "right" }}><span className="rt-th-label">N50</span><Grip label="N50" /></th>
+                              <th style={{ padding: "6px 8px", textAlign: "right" }}><span className="rt-th-label">GC%</span><Grip label="GC%" /></th>
+                              <th style={{ padding: "6px 8px" }}><span className="rt-th-label">QC</span><Grip label="QC" /></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1656,7 +1661,7 @@ export default function App() {
                               </tr>
                             ))}
                           </tbody>
-                        </table>
+                        </ResizableTable>
                       </div>
                       {(qc.notes || []).map((n, i) => (<div key={i} className="note" style={{ marginTop: 6 }}>{n}</div>))}
                     </details>
