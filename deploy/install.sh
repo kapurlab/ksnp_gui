@@ -58,15 +58,109 @@ esac
 # SourceForge direct-download (follows mirror redirects with curl -L).
 KSNP_URL="${KSNP_URL:-https://sourceforge.net/projects/ksnp/files/kSNP4.1%20${KSNP_OS_LABEL}%20package.zip/download}"
 
+# ---- how does this host read a zip? ----
+# `unzip` is absent from a minimal Ubuntu/WSL rootfs (and from slim containers),
+# and this installer is no-sudo by design, so a missing unzip must not be fatal:
+# it made `bdtools install ksnp_gui` die with exit 127 on WSL while the same
+# commit installed cleanly on Linux, macOS and OnDemand. unzip is still tried
+# FIRST, so every host that already worked keeps the byte-identical code path.
+#
+# Whatever unpacks the archive MUST preserve the stored file modes. kSNP4 is
+# stored 0755 and Kchooser4/MakeKSNP4infile are stored 0744, and the
+# `chmod -R a+rX` after extraction only adds +x to files that ALREADY carry an
+# execute bit — so a mode-losing extractor silently yields an install whose
+# binaries cannot run. unzip and bsdtar both preserve modes; bin/ksnp_unzip.py
+# applies them explicitly.
+
+# Path to a bsdtar (libarchive) that can read zip, or "" when there is none.
+# GNU tar CANNOT read zip at all, so a bare `tar` is accepted only when it
+# identifies itself as bsdtar — true on macOS, where /usr/bin/tar IS bsdtar.
+# Conda ships bsdtar in its base prefix, which is what rescues a bare WSL box.
+_ksnp_bsdtar() {
+  # No arrays here on purpose: macOS still ships bash 3.2 as /bin/bash, and
+  # `local arr=(...)` plus `arr+=(...)` are the kind of thing that works
+  # everywhere it was tested and then bites on exactly that host. ${VAR:+...}
+  # yields an empty word for an unset base, which the -n test below skips.
+  local c p
+  for c in bsdtar "${CONDA_BASE:+${CONDA_BASE}/bin/bsdtar}" "${ENV_BIN:+${ENV_BIN}/bsdtar}"; do
+    [[ -n "${c}" ]] || continue
+    p="$(command -v "${c}" 2>/dev/null || true)"
+    [[ -n "${p}" ]] && { printf '%s' "${p}"; return 0; }
+  done
+  if tar --version 2>&1 | grep -qi bsdtar; then
+    p="$(command -v tar 2>/dev/null || true)"
+    [[ -n "${p}" ]] && { printf '%s' "${p}"; return 0; }
+  fi
+  printf ''   # always exit 0: callers read this via $(...) under `set -e`
+}
+
+# The interpreter of last resort. ${PYTHON} is the env python resolved in step 1;
+# fall back to a PATH python for callers that run before it exists.
+_ksnp_python_any() {
+  local c p
+  if [[ -n "${PYTHON:-}" && -x "${PYTHON:-}" ]]; then printf '%s' "${PYTHON}"; return 0; fi
+  for c in python3 python; do
+    p="$(command -v "${c}" 2>/dev/null || true)"
+    [[ -n "${p}" ]] && { printf '%s' "${p}"; return 0; }
+  done
+  printf ''
+}
+
 # Is this file a complete, readable zip archive?
 #
 # `unzip -t` reads the central directory and CRC-checks every member, which is the
 # only cheap way to tell a finished 1 GB download from a truncated one — file size
 # alone cannot, and SourceForge sometimes serves an HTML error page with a 200.
+# The fallbacks do the same job: `bsdtar -tf` fails on a missing or truncated
+# central directory, and `ksnp_unzip.py --test` runs a full CRC pass. Before this
+# existed the no-unzip path returned "can't verify" and a corrupt 545 MB download
+# sailed through to the extractor.
 zip_is_complete() {
+  local bt py
   [[ -s "$1" ]] || return 1
-  command -v unzip >/dev/null 2>&1 || return 0   # can't verify; don't block on it
-  unzip -t -qq "$1" >/dev/null 2>&1
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -t -qq "$1" >/dev/null 2>&1
+    return
+  fi
+  bt="$(_ksnp_bsdtar)"
+  if [[ -n "${bt}" ]]; then
+    "${bt}" -tf "$1" >/dev/null 2>&1
+    return
+  fi
+  py="$(_ksnp_python_any)"
+  if [[ -n "${py}" && -f "${REPO_DIR}/bin/ksnp_unzip.py" ]]; then
+    "${py}" "${REPO_DIR}/bin/ksnp_unzip.py" --test "$1" >/dev/null 2>&1
+    return
+  fi
+  return 0   # can't verify; don't block on it
+}
+
+# Unpack a zip into a directory, preserving stored modes. Order and rationale
+# are documented above _ksnp_bsdtar.
+ksnp_extract_zip() {
+  local zip="$1" dest="$2" bt py
+  if command -v unzip >/dev/null 2>&1; then
+    run unzip -q -o "${zip}" -d "${dest}"
+    return
+  fi
+  bt="$(_ksnp_bsdtar)"
+  if [[ -n "${bt}" ]]; then
+    warn "no unzip on this host — unpacking with ${bt} (libarchive)"
+    run "${bt}" -C "${dest}" -xf "${zip}"
+    return
+  fi
+  py="$(_ksnp_python_any)"
+  if [[ -n "${py}" && -f "${REPO_DIR}/bin/ksnp_unzip.py" ]]; then
+    warn "no unzip and no bsdtar on this host — unpacking with ${py}"
+    run "${py}" "${REPO_DIR}/bin/ksnp_unzip.py" "${zip}" "${dest}"
+    return
+  fi
+  die "cannot unpack ${zip}: this host has no unzip, no bsdtar and no python.
+Install any one of them and re-run, e.g.:
+  Debian/Ubuntu/WSL:  sudo apt-get install -y unzip
+  RHEL/Rocky/Alma:    sudo dnf install -y unzip
+  conda (no sudo):    conda install -n base -c conda-forge libarchive
+Or unpack it into ${dest} by hand and re-run."
 }
 
 # Human-readable size of a file, for progress messages. Portable: BSD stat and GNU
@@ -253,7 +347,7 @@ instead of the file, delete it and re-run, or pass --ksnp-url."
     fi
   fi
   log "unpacking kSNP4 ${KSNP_OS_LABEL} package"
-  run unzip -q -o "${ZIP}" -d "${VENDOR_DIR}"
+  ksnp_extract_zip "${ZIP}" "${VENDOR_DIR}"
   # Find the directory that actually contains the kSNP4 executable and point the
   # stable symlink at it (the archive's top-level folder name carries a space
   # and a version, so don't hard-code it).
@@ -270,7 +364,7 @@ instead of the file, delete it and re-run, or pass --ksnp-url."
       if ksnp_payload_native "${_dir}"; then KSNP_PKG_DIR="${_dir}"; break; fi
     done < <(find "${VENDOR_DIR}" -type f -name kSNP4 \
                ! -path "${KSNP_LINK}/*" ! -path '*/__MACOSX/*' 2>/dev/null)
-    [[ -n "${KSNP_PKG_DIR}" ]] || die "no kSNP4 payload for $(uname -s) found after unzip. Inspect ${VENDOR_DIR}."
+    [[ -n "${KSNP_PKG_DIR}" ]] || die "no kSNP4 payload for $(uname -s) found after unpacking. Inspect ${VENDOR_DIR}."
     # The archive unpacks with group/other stripped: the package dir arrives
     # drwxr-Sr-- (not traversable) and Kchooser4/MakeKSNP4infile arrive -rwxr--r--.
     # On a shared server that means only the installing account can run kSNP4 —
