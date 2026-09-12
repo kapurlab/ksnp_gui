@@ -732,16 +732,30 @@ export default function App() {
     setFolderBrowser((s) => ({ ...s, open: false }));
   }
 
+  // A refused settings write has to be loud. `.then((r) => r.json())` parses a 500
+  // body as happily as a 200 one, so a save the server rejected used to fall
+  // straight through to the success path and look like it had worked — leaving the
+  // form showing a projects_root that had never been accepted. Check res.ok, and
+  // surface the server's detail rather than a bare status code.
+  async function postConfig(body) {
+    const res = await fetch("./api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
   function persistRoots(next) {
     const merged = { ...settingsDraft, ...next };
     setSettingsDraft(merged);
-    fetch("./api/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projects_root: merged.projects_root, saved_project_roots: merged.saved_project_roots }),
-    })
+    postConfig({ projects_root: merged.projects_root, saved_project_roots: merged.saved_project_roots })
       .then(() => fetch("./api/config").then((r) => r.json()).then(setSettingsDraft))
-      .catch(() => {});
+      .catch((e) => window.alert(`Could not save settings: ${e.message}`));
   }
 
   function saveCurrentLocation() {
@@ -760,18 +774,13 @@ export default function App() {
   }
 
   function saveSettings() {
-    fetch("./api/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projects_root: settingsDraft.projects_root,
-        saved_project_roots: settingsDraft.saved_project_roots,
-        min_frac: settingsDraft.min_frac != null ? parseFloat(settingsDraft.min_frac) : undefined,
-      }),
+    postConfig({
+      projects_root: settingsDraft.projects_root,
+      saved_project_roots: settingsDraft.saved_project_roots,
+      min_frac: settingsDraft.min_frac != null ? parseFloat(settingsDraft.min_frac) : undefined,
     })
-      .then((r) => r.json())
       .then(() => loadProjects())
-      .catch(() => {});
+      .catch((e) => window.alert(`Could not save settings: ${e.message}`));
   }
 
   const logLineClass = (line) => {

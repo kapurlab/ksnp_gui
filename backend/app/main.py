@@ -19,6 +19,7 @@ served from / (uvicorn is behind the OOD rnode proxy — relative paths only).
 """
 
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .config import load_config, save_config, shared_projects_root
+from .config import CONFIG_PATH, load_config, save_config, shared_projects_root
 from .jobs import JobManager
 from .request_safety import install_request_safety
 from .sra import (
@@ -261,6 +262,29 @@ def _ensure_project_dirs(project_dir: Path) -> None:
     (project_dir / f"{project_dir.name}_VCFs").mkdir(parents=True, exist_ok=True)
 
 
+def _write_failure_detail(exc: OSError, where: Path) -> str:
+    """A refused write phrased as something the user can act on.
+
+    The GUI prefixes these with "Could not create project: ", so lead with the
+    location and its problem rather than restating the verb. EDQUOT and ENOSPC are
+    the two a cluster actually produces, and both need the same second sentence:
+    the lever is Settings, because the default projects root sits under a quota'd
+    $HOME that a single kSNP run's jellyfish stage can fill on its own.
+    """
+    if exc.errno in (errno.EDQUOT, errno.ENOSPC):
+        problem = ("is over its disk quota" if exc.errno == errno.EDQUOT
+                   else "has no space left")
+        return (
+            f"{where} {problem}. Free up space there, or set 'Personal projects "
+            "root' in Settings to a location with more room — group or work storage "
+            "rather than your home directory — then try again."
+        )
+    if exc.errno == errno.EROFS:
+        return (f"{where} is mounted read-only. Set 'Personal projects root' in "
+                "Settings to a writable location.")
+    return f"{where}: {exc.strerror or exc}"
+
+
 def _create_project(name: str, scope: str) -> Path:
     name = _normalize_project_name(name)
     cfg = load_config()
@@ -275,7 +299,7 @@ def _create_project(name: str, scope: str) -> Path:
     try:
         root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise ValueError(f"Cannot create projects root {root}: {exc}")
+        raise ValueError(_write_failure_detail(exc, root))
     project_dir = root / name
     if project_dir.exists():
         raise ValueError(f"Project already exists: {name}")
@@ -286,6 +310,16 @@ def _create_project(name: str, scope: str) -> Path:
             f"No permission to create a project under {root}. Shared projects require "
             "lab write access; create it as a personal project instead."
         )
+    except OSError as exc:
+        # A home over its quota (EDQUOT), a full filesystem (ENOSPC) and a read-only
+        # mount (EROFS) all arrive here as a bare OSError. Uncaught, FastAPI turns
+        # them into a 500 carrying no detail, and the GUI can only say "Could not
+        # create project: 500" — which reads as a permissions problem with the root
+        # the user just picked, sending them to check group access that was never
+        # the issue. Naming `root` as well as the errno also exposes a stale
+        # projects_root: the path here is the one the SERVER resolved, which is not
+        # necessarily the one the Settings form is displaying.
+        raise ValueError(_write_failure_detail(exc, root))
     try:
         with open(project_dir / "project.json", "w", encoding="utf-8") as f:
             json.dump({"name": name, "created_at": _now_iso(), "status": "created"},
@@ -892,7 +926,24 @@ def api_save_config(payload: ConfigPayload):
             if r and r not in seen:
                 seen.add(r); cleaned.append(r)
         cfg["saved_project_roots"] = cleaned
-    save_config(cfg)
+    try:
+        save_config(cfg)
+    except OSError as exc:
+        # config.json lives under $HOME, and on a cluster $HOME is quota'd — a home
+        # at its hard limit refuses even a 200-byte write. Returning ok:true over
+        # that made Settings silently inert: the form kept showing the typed
+        # projects_root while every later request went on resolving the old one,
+        # so creating a project failed against a path the user could not see.
+        if exc.errno in (errno.EDQUOT, errno.ENOSPC):
+            detail = (
+                f"There is no room to write {CONFIG_PATH} — its filesystem is full or "
+                "over quota. Your settings were NOT changed. Free up space there, "
+                "then save again."
+            )
+        else:
+            detail = (f"{CONFIG_PATH} could not be written: {exc.strerror or exc}. "
+                      "Your settings were NOT changed.")
+        raise HTTPException(507, detail)
     return JSONResponse({"ok": True})
 
 
