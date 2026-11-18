@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import { askOnPage } from "./pageAsk.jsx";
 import ThemeToggle from "./ThemeToggle";
 import CitationFooter from "./Citations";
 import ResultsPane from "./ResultsPane";
@@ -255,7 +256,7 @@ export default function App() {
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
-        window.alert(`Could not create project: ${detail.detail || res.status}`);
+        askOnPage({ notice: true, message: `Could not create project: ${detail.detail || res.status}` });
         return;
       }
       const created = await res.json().catch(() => ({}));
@@ -435,10 +436,7 @@ export default function App() {
 
   async function renameInput(name, oldFile) {
     const suggestion = oldFile.replace(/\.(fasta|fa|fna|fas|ffn|fsa)$/i, "");
-    const nn = window.prompt(
-      `Rename "${oldFile}".\nGive it a meaningful label — it becomes the genome name in the kSNP trees & matrices.\nThe extension is kept; spaces and special characters become "_".`,
-      suggestion
-    );
+    const nn = (await askOnPage({ title: "Rename genome", okLabel: "Rename", message: `Rename "${oldFile}".\nGive it a meaningful label — it becomes the genome name in the kSNP trees & matrices.\nThe extension is kept; spaces and special characters become "_".`, input: { defaultValue: suggestion } }));
     if (nn === null || !nn.trim()) return;
     try {
       const res = await fetch(`./api/projects/${encodeURIComponent(name)}/inputs/rename`, {
@@ -511,7 +509,7 @@ export default function App() {
   }
 
   async function deleteInput(name, filename) {
-    if (!window.confirm(`Remove ${filename} from this project's download/ folder?`)) return;
+    if (!(await askOnPage({ okLabel: "Remove", message: `Remove ${filename} from this project's download/ folder?` }))) return;
     try {
       await fetch(`./api/projects/${encodeURIComponent(name)}/inputs/${encodeURIComponent(filename)}`, { method: "DELETE" });
       await refreshAfterLoad(name);
@@ -573,7 +571,7 @@ export default function App() {
     if (running || !activeProject) return;
     const incl = includedGenomes(activeProject);
     if (incl.length < 2) {
-      window.alert("kSNP needs at least 2 genome FASTAs. Add FASTA assemblies to the project, or include more genomes.");
+      askOnPage({ notice: true, message: "kSNP needs at least 2 genome FASTAs. Add FASTA assemblies to the project, or include more genomes." });
       return;
     }
     if (eventSourceRef.current) { eventSourceRef.current.close(); eventSourceRef.current = null; }
@@ -706,7 +704,7 @@ export default function App() {
   }
 
   async function deleteRun(project, lbl) {
-    if (!window.confirm(`Delete kSNP run "${lbl}" and all its outputs?`)) return;
+    if (!(await askOnPage({ okLabel: "Delete", message: `Delete kSNP run "${lbl}" and all its outputs?` }))) return;
     try {
       await fetch(`./api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(lbl)}`, { method: "DELETE" });
       if (selectedRun && selectedRun.project === project && selectedRun.label === lbl) setSelectedRun(null);
